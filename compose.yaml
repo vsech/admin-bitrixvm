@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bitrixvm
+      POSTGRES_USER: bitrixvm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bitrixvm -d bitrixvm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file: ${BITRIXVM_ENV_FILE:-.env}
+    secrets:
+      - postgres_password
+      - master_key
+      - jwt_secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    env_file: ${BITRIXVM_ENV_FILE:-.env}
+    secrets:
+      - postgres_password
+      - master_key
+      - jwt_secret
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    env_file: ${BITRIXVM_ENV_FILE:-.env}
+    secrets:
+      - postgres_password
+      - master_key
+      - jwt_secret
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      BITRIXVM_PUBLIC_HOST: ${BITRIXVM_PUBLIC_HOST:-localhost}
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  postgres_password:
+    file: ${BITRIXVM_POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}
+  master_key:
+    file: ${BITRIXVM_MASTER_KEY_SECRET_FILE:-./secrets/master_key}
+  jwt_secret:
+    file: ${BITRIXVM_JWT_SECRET_SOURCE:-./secrets/jwt_secret}
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
