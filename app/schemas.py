@@ -98,6 +98,7 @@ class ServerRead(ApiModel):
 
 class CapabilityRead(ApiModel):
     action: str
+    summary: str
     available: bool
     reason: str | None = None
     risk: str

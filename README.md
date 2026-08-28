@@ -4,7 +4,7 @@
 подключается к master-хосту по SSH, использует штатные `wrapper_ansible_conf` и `bx-*`,
 нормализует их ответы и ведёт собственный аудит операций.
 
-Первая версия содержит backend и Swagger. Реестр включает 83 типизированных действия из
+Проект содержит backend, Swagger и адаптивную веб-консоль. Реестр включает 83 типизированных действия из
 активных и скрытых модулей `menu.sh`: pool/hosts/local, MySQL, memcached, tasks, sites,
 Sphinx, web/PHP/certificates, monitoring, push и transformer.
 
@@ -23,9 +23,21 @@ docker compose up -d --build
 docker compose exec api bitrixvm-admin create admin
 ```
 
-Swagger доступен по `https://localhost/docs`. Caddy использует internal CA; для браузера
+Веб-консоль доступна по `https://localhost`, Swagger — по `https://localhost/docs`. Caddy использует internal CA; для браузера
 нужно доверить корневой сертификат из volume Caddy либо заменить TLS-конфигурацию своим
 сертификатом. PostgreSQL и FastAPI наружу не публикуются.
+
+### Разработка фронтенда
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite запускается на `http://127.0.0.1:5173` и проксирует API на локальный FastAPI порт
+`8000`. Для изолированной проверки интерфейса без подключения к серверам откройте
+`http://127.0.0.1:5173/?demo=1`; demo-режим не отправляет запросы к API.
 
 ## Рабочий процесс API
 
@@ -53,4 +65,3 @@ python3 -m venv .venv
 Поддерживаемая серверная платформа v1 — BitrixEnv 9.x на AlmaLinux/Rocky/CentOS
 Stream 9. Недоступные для конкретной конфигурации действия остаются в контракте и
 получают `available=false` с причиной в capabilities.
-

@@ -12,3 +12,4 @@ def test_openapi_contains_security_and_operation_flow() -> None:
     assert "/api/v1/servers/{server_id}/actions/{action}" in paths
     assert "/api/v1/operations/{operation_id}/events/stream" in paths
     assert "OAuth2PasswordBearer" in schema["components"]["securitySchemes"]
+    assert "summary" in schema["components"]["schemas"]["CapabilityRead"]["required"]

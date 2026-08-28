@@ -158,6 +158,7 @@ def capability_models(server: Server) -> list[CapabilityRead]:
     return [
         CapabilityRead(
             action=name,
+            summary=spec.summary,
             available=bool(discovered.get(name, {}).get("available", False)),
             reason=discovered.get(name, {}).get("reason"),
             risk=spec.risk,

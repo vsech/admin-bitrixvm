@@ -14,3 +14,4 @@ caddy-config/
 secrets/*
 !secrets/.gitkeep
 
+node_modules/
