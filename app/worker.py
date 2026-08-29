@@ -46,6 +46,25 @@ def remote_status_succeeded(action: str, status: str) -> bool:
     return status == "finished" or (action == "host.reboot" and status == "interrupt")
 
 
+def find_error_message(value: Any) -> str | None:
+    if isinstance(value, dict):
+        messages = value.get("error_messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if isinstance(message, str) and message:
+                    return message
+        for child in value.values():
+            found = find_error_message(child)
+            if found:
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = find_error_message(child)
+            if found:
+                return found
+    return None
+
+
 async def add_event(operation: Operation, event: str, message: str, **data: Any) -> None:
     async with SessionLocal() as session:
         session.add(
@@ -171,9 +190,7 @@ async def poll_remote_task(
             )
             last_status = status_value
         if status_value in TERMINAL_REMOTE:
-            if remote_status_succeeded(operation.action, status_value):
-                return parsed
-            raise SSHError(f"remote task {task_id} completed with status {status_value}")
+            return parsed
         await asyncio.sleep(2)
     raise SSHError(f"remote task {task_id} timed out")
 
@@ -210,8 +227,12 @@ async def process_operation(operation_id: uuid.UUID) -> None:
     client = SSHClient(server)
     operation = await set_status(operation_id, "running")
     await add_event(operation, "started", f"Started {spec.name}", category=spec.category)
+    results: list[dict[str, Any]] = []
+    deferred_secret_paths: dict[str, str] = {}
     try:
-        results, task_id, disconnected = await client.execute_action(spec, parameters)
+        results, task_id, disconnected, deferred_secret_paths = await client.execute_action(
+            spec, parameters
+        )
         if task_id:
             operation = await set_status(operation_id, "running", remote_task_id=task_id)
             await add_event(
@@ -222,6 +243,13 @@ async def process_operation(operation_id: uuid.UUID) -> None:
             )
             remote_result = await poll_remote_task(client, operation, task_id)
             results.append({"remote_task": remote_result})
+            remote_status = find_status(remote_result)
+            if remote_status is None or not remote_status_succeeded(operation.action, remote_status):
+                detail = find_error_message(remote_result)
+                suffix = f": {detail}" if detail else ""
+                raise SSHError(
+                    f"remote task {task_id} completed with status {remote_status or 'unknown'}{suffix}"
+                )
         if disconnected:
             operation = await set_status(operation_id, "reconnecting", result={"commands": results})
             await add_event(
@@ -257,6 +285,7 @@ async def process_operation(operation_id: uuid.UUID) -> None:
         operation = await set_status(
             operation_id,
             "failed",
+            result={"commands": results} if results else None,
             error_code=type(exc).__name__,
             error_message=str(exc),
         )
@@ -272,6 +301,8 @@ async def process_operation(operation_id: uuid.UUID) -> None:
                 )
             )
             await session.commit()
+    finally:
+        await client.cleanup_secret_files(deferred_secret_paths)
 
 
 async def run_worker() -> None:

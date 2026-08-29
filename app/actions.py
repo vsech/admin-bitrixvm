@@ -135,6 +135,12 @@ class ActionSpec:
 
 HOST = ParamSpec(pattern=r"[A-Za-z0-9_.-]{1,253}", description="Bitrix pool hostname")
 SITE = ParamSpec(pattern=r"[A-Za-z0-9_.-]{1,253}", description="Bitrix site name")
+DATABASE_NAME = ParamSpec(
+    pattern=r"[A-Za-z_][A-Za-z0-9_-]{0,62}", description="Database name"
+)
+DATABASE_USER = ParamSpec(
+    pattern=r"[A-Za-z_][A-Za-z0-9_-]{0,62}", description="Database user"
+)
 PATH = ParamSpec(pattern=r"/[A-Za-z0-9_./-]{1,1023}", description="Absolute remote path")
 INTERFACE = ParamSpec(pattern=r"[A-Za-z0-9_.:/-]{1,64}")
 BOOL = ParamSpec(kind="boolean")
@@ -187,8 +193,64 @@ def mysql_password(action: str) -> CommandBuilder:
     )
 
 
+def site_create_with_database(
+    site_type: Literal["kernel", "ext_kernel"]
+) -> CommandBuilder:
+    def build(
+        values: dict[str, Any], secret_files: dict[str, str]
+    ) -> tuple[RemoteCommand, ...]:
+        password_file = secret_files.get("db_password", values["db_password"])
+        return (
+            RemoteCommand(
+                (
+                    SITES,
+                    "-a",
+                    "create",
+                    "--site",
+                    values["site"],
+                    "--type",
+                    site_type,
+                    "--charset",
+                    "utf-8",
+                    "--root",
+                    values["root"],
+                    "--dbtype",
+                    values["db_type"],
+                    "--database",
+                    values["db_name"],
+                    "--user",
+                    values["db_user"],
+                    "--password_file",
+                    password_file,
+                ),
+                secret_files=secret_files,
+            ),
+        )
+
+    return build
+
+
+def site_create_link(
+    values: dict[str, Any], secret_files: dict[str, str]
+) -> tuple[RemoteCommand, ...]:
+    argv = [
+        SITES,
+        "-a",
+        "create",
+        "--site",
+        values["site"],
+        "--type",
+        "link",
+        "--kernel_root",
+        values["kernel_root"],
+    ]
+    if values.get("kernel_site"):
+        argv.extend(("--kernel_site", values["kernel_site"]))
+    return (RemoteCommand(tuple(argv), secret_files=secret_files),)
+
+
 def site_email(values: dict[str, Any], secret_files: dict[str, str]) -> tuple[RemoteCommand, ...]:
-    # bx-sites has no password-file option. A fixed root-only wrapper reads the temporary file.
+    # bx-sites accepts a root-only temporary file for the SMTP password.
     argv = [
         f"{BIN}/bx-sites",
         "-a",
@@ -207,7 +269,9 @@ def site_email(values: dict[str, Any], secret_files: dict[str, str]) -> tuple[Re
     if values.get("tls"):
         argv.append("--smtptls")
     if values.get("smtp_password"):
-        argv.extend(("--password", values["smtp_password"]))
+        argv.extend(
+            ("--password_file", secret_files.get("smtp_password", values["smtp_password"]))
+        )
     return (RemoteCommand(tuple(argv), secret_files=secret_files),)
 
 
@@ -366,8 +430,18 @@ ACTION_SPECS = [
         "hosts",
         "high",
         "Change the bitrix user password",
-        dynamic(W, "bx_passwd", (("host", "--host"),)),
-        {"host": HOST},
+        dynamic(
+            W,
+            "bx_passwd",
+            (("host", "--host"), ("user", "--user"), ("password", "--new")),
+        ),
+        {
+            "host": HOST,
+            "user": ParamSpec(
+                required=False, default="bitrix", pattern=r"[A-Za-z_][A-Za-z0-9_-]{0,31}"
+            ),
+            "password": SECRET,
+        },
         (W,),
     ),
     _spec(
@@ -375,8 +449,11 @@ ACTION_SPECS = [
         "hosts",
         "high",
         "Set timezone for the whole pool",
-        dynamic(W, "timezone", (("timezone", "--timezone"),)),
-        {"timezone": ParamSpec(pattern=r"[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+")},
+        dynamic(W, "timezone", (("timezone", "--timezone"), ("update_php", "--php"))),
+        {
+            "timezone": ParamSpec(pattern=r"[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+"),
+            "update_php": ParamSpec(kind="boolean", required=False, default=True),
+        },
         (W,),
     ),
     _spec(
@@ -652,24 +729,13 @@ ACTION_SPECS = [
         "sites",
         "high",
         "Create a Bitrix kernel site",
-        dynamic(
-            SITES,
-            "create",
-            (
-                ("site", "--site"),
-                ("root", "--root"),
-                ("db_type", "--dbtype"),
-                ("db_name", "--dbname"),
-                ("db_user", "--user"),
-                ("db_password", "--password"),
-            ),
-        ),
+        site_create_with_database("kernel"),
         {
             "site": SITE,
             "root": PATH,
             "db_type": ParamSpec(kind="enum", enum=("mysql", "pgsql")),
-            "db_name": HOST,
-            "db_user": HOST,
+            "db_name": DATABASE_NAME,
+            "db_user": DATABASE_USER,
             "db_password": SECRET,
         },
         (SITES,),
@@ -679,8 +745,15 @@ ACTION_SPECS = [
         "sites",
         "high",
         "Create an external kernel",
-        dynamic(SITES, "create", (("site", "--site"), ("kernel_root", "--kernel_root"))),
-        {"site": SITE, "kernel_root": PATH},
+        site_create_with_database("ext_kernel"),
+        {
+            "site": SITE,
+            "root": PATH,
+            "db_type": ParamSpec(kind="enum", enum=("mysql", "pgsql")),
+            "db_name": DATABASE_NAME,
+            "db_user": DATABASE_USER,
+            "db_password": SECRET,
+        },
         (SITES,),
     ),
     _spec(
@@ -688,15 +761,7 @@ ACTION_SPECS = [
         "sites",
         "high",
         "Create a link site",
-        dynamic(
-            SITES,
-            "create",
-            (
-                ("site", "--site"),
-                ("kernel_root", "--kernel_root"),
-                ("kernel_site", "--kernel_site"),
-            ),
-        ),
+        site_create_link,
         {
             "site": SITE,
             "kernel_root": PATH,
@@ -752,7 +817,7 @@ ACTION_SPECS = [
             SITES,
             "backup",
             (
-                ("database", "--dbname"),
+                ("database", "--database"),
                 ("enable", "--enable"),
                 ("minute", "--minute"),
                 ("hour", "--hour"),
@@ -762,7 +827,7 @@ ACTION_SPECS = [
             ),
         ),
         {
-            "database": HOST,
+            "database": DATABASE_NAME,
             "enable": ParamSpec(kind="boolean", required=False, default=True),
             "minute": ParamSpec(kind="integer", minimum=0, maximum=59),
             "hour": ParamSpec(kind="integer", minimum=0, maximum=23),
@@ -777,8 +842,11 @@ ACTION_SPECS = [
         "sites",
         "high",
         "Disable kernel backups",
-        dynamic(SITES, "backup", (("database", "--dbname"), ("disable", "--disable"))),
-        {"database": HOST, "disable": ParamSpec(kind="boolean", required=False, default=True)},
+        dynamic(SITES, "backup", (("database", "--database"), ("disable", "--disable"))),
+        {
+            "database": DATABASE_NAME,
+            "disable": ParamSpec(kind="boolean", required=False, default=True),
+        },
         (SITES,),
     ),
     _spec(
@@ -796,6 +864,7 @@ ACTION_SPECS = [
                 ("login", "--ntlm_login"),
                 ("password", "--password_file"),
                 ("host", "--ntlm_host"),
+                ("database", "--database"),
             ),
         ),
         {
@@ -805,6 +874,7 @@ ACTION_SPECS = [
             "login": HOST,
             "password": SECRET,
             "host": HOST,
+            "database": DATABASE_NAME,
         },
         (SITES,),
     ),
@@ -813,8 +883,9 @@ ACTION_SPECS = [
         "sites",
         "high",
         "Update NTLM configuration",
-        cli(SITES, "-a", "ntlm_update"),
-        commands=(SITES,),
+        dynamic(SITES, "ntlm_update", (("database", "--database"),)),
+        {"database": DATABASE_NAME},
+        (SITES,),
     ),
     _spec(
         "site.ntlm_delete",
@@ -904,7 +975,7 @@ ACTION_SPECS = [
         ),
         {
             "host": HOST,
-            "database": HOST,
+            "database": DATABASE_NAME,
             "reindex": ParamSpec(kind="boolean", required=False, default=False),
         },
         (SPHINX,),
@@ -921,7 +992,7 @@ ACTION_SPECS = [
         ),
         {
             "host": HOST,
-            "database": HOST,
+            "database": DATABASE_NAME,
             "reindex": ParamSpec(kind="boolean", required=False, default=True),
         },
         (SPHINX,),
@@ -932,7 +1003,7 @@ ACTION_SPECS = [
         "critical",
         "Delete a Sphinx instance/index",
         dynamic(SPHINX, "remove", (("host", "--server"), ("database", "--dbname"))),
-        {"host": HOST, "database": HOST},
+        {"host": HOST, "database": DATABASE_NAME},
         (SPHINX,),
     ),
     _spec(

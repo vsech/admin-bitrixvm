@@ -197,6 +197,15 @@ class SSHClient:
         except (OSError, asyncssh.Error):
             logger.warning("unable to start SFTP for secret cleanup")
 
+    async def cleanup_secret_files(self, paths: dict[str, str]) -> None:
+        if not paths:
+            return
+        try:
+            async with self.connect() as connection:
+                await self.remove_files(connection, paths)
+        except SSHError:
+            logger.warning("unable to reconnect for remote secret cleanup")
+
     async def execute(
         self, commands: tuple[RemoteCommand, ...], secret_values: dict[str, str]
     ) -> tuple[list[dict[str, Any]], str | None, bool]:
@@ -228,7 +237,7 @@ class SSHClient:
 
     async def execute_action(
         self, spec: ActionSpec, values: dict[str, Any]
-    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+    ) -> tuple[list[dict[str, Any]], str | None, bool, dict[str, str]]:
         secret_values = {
             name: str(values[name])
             for name, param in spec.params.items()
@@ -237,6 +246,7 @@ class SSHClient:
         results: list[dict[str, Any]] = []
         task_id: str | None = None
         disconnected = False
+        defer_secret_cleanup = False
         async with self.connect() as connection:
             secret_paths = await self.upload_secrets(connection, secret_values)
             commands = spec.builder(values, secret_paths)
@@ -256,10 +266,12 @@ class SSHClient:
                             f"remote command failed with exit status {result.exit_status}: "
                             f"{redact(result.stderr.strip())}"
                         )
+                defer_secret_cleanup = task_id is not None and not disconnected
             finally:
-                if not disconnected:
+                if not disconnected and not defer_secret_cleanup:
                     await self.remove_files(connection, secret_paths)
-        return results, task_id, disconnected
+        deferred_paths = secret_paths if defer_secret_cleanup else {}
+        return results, task_id, disconnected, deferred_paths
 
     async def discovery(self) -> dict[str, Any]:
         checks = {
