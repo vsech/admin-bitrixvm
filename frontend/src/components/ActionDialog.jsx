@@ -9,6 +9,10 @@ function initialValues(schema) {
   return Object.fromEntries(Object.entries(schema?.properties || {}).map(([key, definition]) => [key, definition.default ?? (definition.type === "boolean" ? false : "")]));
 }
 
+function fieldOptions(definition) {
+  return definition.enum || definition["x-options"] || [];
+}
+
 export function ActionDialog({ server, capability, onClose, onExecuted, notify }) {
   const [values, setValues] = useState(() => initialValues(capability.request_schema));
   const [preview, setPreview] = useState(null);
@@ -42,7 +46,7 @@ export function ActionDialog({ server, capability, onClose, onExecuted, notify }
           <div className="form-stack">
             <div className={`risk-callout risk-callout--${capability.risk}`}><span>{riskLabels[capability.risk]}</span><p>{confirmationRequired ? "Перед запуском API сформирует одноразовое подтверждение параметров." : "Действие можно поставить в очередь без дополнительного подтверждения."}</p></div>
             {properties.length === 0 ? <div className="empty-params">У действия нет параметров.</div> : properties.map(([key, definition]) => <label key={key}>{definition.description || key}{!capability.request_schema.required?.includes(key) ? <span className="optional">необязательно</span> : null}
-              {definition.type === "boolean" ? <span className="switch-row"><input type="checkbox" checked={Boolean(values[key])} onChange={(event) => setValue(key, definition, event.target.checked)} /> Включено</span> : definition.enum ? <select value={values[key]} onChange={(event) => setValue(key, definition, event.target.value)} required={capability.request_schema.required?.includes(key)}><option value="">Выберите значение</option>{definition.enum.map((item) => <option key={item}>{item}</option>)}</select> : <input type={definition.format === "password" ? "password" : definition.type === "integer" ? "number" : "text"} value={values[key]} min={definition.minimum} max={definition.maximum} pattern={definition.pattern} onChange={(event) => setValue(key, definition, event.target.value)} required={capability.request_schema.required?.includes(key)} />}
+              {definition.type === "boolean" ? <span className="switch-row"><input type="checkbox" checked={Boolean(values[key])} onChange={(event) => setValue(key, definition, event.target.checked)} /> Включено</span> : fieldOptions(definition).length ? <select value={values[key]} onChange={(event) => setValue(key, definition, event.target.value)} required={capability.request_schema.required?.includes(key)}><option value="">Выберите значение</option>{fieldOptions(definition).map((item) => <option key={item} value={item}>{item}</option>)}</select> : <input type={definition.format === "password" ? "password" : definition.type === "integer" ? "number" : "text"} value={values[key]} min={definition.minimum} max={definition.maximum} pattern={definition.pattern} onChange={(event) => setValue(key, definition, event.target.value)} required={capability.request_schema.required?.includes(key)} />}
               <small className="field-code">{key}</small>
             </label>)}
           </div>

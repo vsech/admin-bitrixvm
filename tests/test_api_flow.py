@@ -28,6 +28,15 @@ async def api_client():
             host_key_fingerprint="SHA256:test",
             capabilities={
                 "compatible": True,
+                "pool": {
+                    "exit_status": 0,
+                    "data": {
+                        "params": {
+                            "bx02.example.test": {"hostname": "bx02.example.test"},
+                            "bxcv.ru": {"hostname": "bxcv.ru"},
+                        }
+                    },
+                },
                 "actions": {
                     "host.reboot": {"available": True, "reason": None},
                     "memcached.update": {"available": True, "reason": None},
@@ -61,6 +70,16 @@ async def test_login_capabilities_preview_and_idempotent_enqueue(api_client) -> 
     capabilities = await client.get(f"/api/v1/servers/{server_id}/capabilities", headers=headers)
     assert capabilities.status_code == 200
     assert len(capabilities.json()) == 83
+    by_action = {item["action"]: item for item in capabilities.json()}
+    assert by_action["host.reboot"]["request_schema"]["properties"]["host"][
+        "x-options"
+    ] == ["bx02.example.test", "bxcv.ru"]
+    assert "x-options" not in by_action["host.rename"]["request_schema"]["properties"][
+        "hostname"
+    ]
+    assert "x-options" not in by_action["local.hostname"]["request_schema"]["properties"][
+        "hostname"
+    ]
 
     missing_confirmation = await client.post(
         f"/api/v1/servers/{server_id}/actions/host.reboot",

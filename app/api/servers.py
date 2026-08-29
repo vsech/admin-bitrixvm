@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -25,6 +26,7 @@ from app.security import SecretBox
 from app.ssh import SSHClient, SSHError, probe_host_key
 
 router = APIRouter(prefix="/api/v1/servers", tags=["servers"])
+POOL_HOST_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,253}")
 
 
 async def get_server_or_404(server_id: uuid.UUID, session: AsyncSession) -> Server:
@@ -153,6 +155,39 @@ async def refresh_capabilities(
     return capability_models(server)
 
 
+def pool_hostnames(value: Any) -> list[str]:
+    """Extract hostnames from normalized wrapper_ansible_conf status output."""
+    result: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if (
+                    str(key).lower() in {"host", "hostname", "server"}
+                    and isinstance(child, str)
+                    and POOL_HOST_PATTERN.fullmatch(child)
+                ):
+                    result.add(child)
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return sorted(result)
+
+
+def request_schema_with_options(server: Server, action: str) -> dict[str, Any]:
+    schema = ACTIONS[action].request_schema()
+    options = pool_hostnames(server.capabilities.get("pool"))
+    if not options:
+        return schema
+    for definition in schema.get("properties", {}).values():
+        if definition.get("x-options-source") == "pool_hosts":
+            definition["x-options"] = options
+    return schema
+
+
 def capability_models(server: Server) -> list[CapabilityRead]:
     discovered = server.capabilities.get("actions", {})
     return [
@@ -163,7 +198,7 @@ def capability_models(server: Server) -> list[CapabilityRead]:
             reason=discovered.get(name, {}).get("reason"),
             risk=spec.risk,
             category=spec.category,
-            request_schema=spec.request_schema(),
+            request_schema=request_schema_with_options(server, name),
         )
         for name, spec in sorted(ACTIONS.items())
     ]

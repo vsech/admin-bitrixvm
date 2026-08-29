@@ -24,6 +24,7 @@ class ParamSpec:
     minimum: int | None = None
     maximum: int | None = None
     description: str = ""
+    options_source: Literal["pool_hosts"] | None = None
 
     def validate(self, name: str, value: Any) -> Any:
         if self.kind in {"string", "secret", "enum"}:
@@ -71,6 +72,8 @@ class ParamSpec:
             result["minimum"] = self.minimum
         if self.maximum is not None:
             result["maximum"] = self.maximum
+        if self.options_source:
+            result["x-options-source"] = self.options_source
         if not self.required:
             result["default"] = self.default
         return result
@@ -133,7 +136,12 @@ class ActionSpec:
         }
 
 
-HOST = ParamSpec(pattern=r"[A-Za-z0-9_.-]{1,253}", description="Bitrix pool hostname")
+HOST = ParamSpec(pattern=r"[A-Za-z0-9_.-]{1,253}", description="Hostname or identifier")
+POOL_HOST = ParamSpec(
+    pattern=r"[A-Za-z0-9_.-]{1,253}",
+    description="Bitrix pool hostname",
+    options_source="pool_hosts",
+)
 SITE = ParamSpec(pattern=r"[A-Za-z0-9_.-]{1,253}", description="Bitrix site name")
 DATABASE_NAME = ParamSpec(
     pattern=r"[A-Za-z_][A-Za-z0-9_-]{0,62}", description="Database name"
@@ -385,7 +393,7 @@ ACTION_SPECS = [
         "critical",
         "Remove a host and its Bitrix pool configuration",
         dynamic(W, "del", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -394,7 +402,7 @@ ACTION_SPECS = [
         "critical",
         "Forget an unreachable host",
         dynamic(W, "forget_host", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -403,7 +411,7 @@ ACTION_SPECS = [
         "critical",
         "Reboot a pool host",
         dynamic(W, "bx_reboot", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
         ("SSH connectivity will be interrupted.",),
     ),
@@ -413,7 +421,7 @@ ACTION_SPECS = [
         "high",
         "Update Bitrix packages on a pool host",
         dynamic(W, "bx_update", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -422,7 +430,7 @@ ACTION_SPECS = [
         "critical",
         "Upgrade all operating system packages",
         dynamic(W, "bx_upgrade", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -436,7 +444,7 @@ ACTION_SPECS = [
             (("host", "--host"), ("user", "--user"), ("password", "--new")),
         ),
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "user": ParamSpec(
                 required=False, default="bitrix", pattern=r"[A-Za-z_][A-Za-z0-9_-]{0,31}"
             ),
@@ -462,7 +470,7 @@ ACTION_SPECS = [
         "critical",
         "Rename a pool host",
         dynamic(W, "change_hostname", (("host", "--host"), ("hostname", "--hostname"))),
-        {"host": HOST, "hostname": HOST},
+        {"host": POOL_HOST, "hostname": HOST},
         (W,),
         ("The host identity and SSH connectivity can change.",),
     ),
@@ -483,7 +491,7 @@ ACTION_SPECS = [
             "critical",
             f"{direction.title()} PHP runtime",
             dynamic(W, action, (("host", "--host"),)),
-            {"host": HOST},
+            {"host": POOL_HOST},
             (W,),
         )
         for direction, action in (
@@ -503,7 +511,7 @@ ACTION_SPECS = [
         "critical",
         "Upgrade MySQL to 8.4",
         dynamic(W, "bx_upgrade_mysql84", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -512,7 +520,7 @@ ACTION_SPECS = [
         "critical",
         "Upgrade PostgreSQL to 15",
         dynamic(W, "bx_upgrade_pgsql_15", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -521,7 +529,7 @@ ACTION_SPECS = [
         "critical",
         "Upgrade PostgreSQL to 16",
         dynamic(W, "bx_upgrade_pgsql_16", (("host", "--host"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (W,),
     ),
     _spec(
@@ -601,7 +609,7 @@ ACTION_SPECS = [
         "high",
         "Change MySQL root password",
         mysql_password("change_password"),
-        {"host": HOST, "password": SECRET},
+        {"host": POOL_HOST, "password": SECRET},
         (MYSQL,),
     ),
     _spec(
@@ -610,7 +618,7 @@ ACTION_SPECS = [
         "high",
         "Write MySQL client configuration",
         mysql_password("client_config"),
-        {"host": HOST, "password": SECRET},
+        {"host": POOL_HOST, "password": SECRET},
         (MYSQL,),
     ),
     _spec(
@@ -619,7 +627,7 @@ ACTION_SPECS = [
         "high",
         "Start MySQL service",
         dynamic(MYSQL, "start_service", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MYSQL,),
     ),
     _spec(
@@ -628,7 +636,7 @@ ACTION_SPECS = [
         "critical",
         "Stop MySQL service",
         dynamic(MYSQL, "stop_service", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MYSQL,),
     ),
     _spec(
@@ -648,7 +656,7 @@ ACTION_SPECS = [
             ),
         ),
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "cluster_login": HOST,
             "cluster_password": SECRET,
             "replica_login": HOST,
@@ -663,7 +671,7 @@ ACTION_SPECS = [
         "critical",
         "Promote a MySQL server to master",
         dynamic(MYSQL, "master", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MYSQL,),
         disabled_reason="MySQL replication actions are disabled in BitrixEnv 9.0.10",
     ),
@@ -673,7 +681,7 @@ ACTION_SPECS = [
         "critical",
         "Remove a MySQL replica",
         dynamic(MYSQL, "remove", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MYSQL,),
         disabled_reason="MySQL replication actions are disabled in BitrixEnv 9.0.10",
     ),
@@ -683,7 +691,7 @@ ACTION_SPECS = [
         "high",
         "Create memcached instance",
         dynamic(MC, "create", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MC,),
     ),
     _spec(
@@ -700,7 +708,7 @@ ACTION_SPECS = [
         "critical",
         "Remove memcached instance",
         dynamic(MC, "remove", (("host", "--server"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (MC,),
     ),
     _spec(
@@ -873,7 +881,7 @@ ACTION_SPECS = [
             "domain_controller": HOST,
             "login": HOST,
             "password": SECRET,
-            "host": HOST,
+            "host": POOL_HOST,
             "database": DATABASE_NAME,
         },
         (SITES,),
@@ -910,7 +918,7 @@ ACTION_SPECS = [
             "domain_controller": HOST,
             "login": HOST,
             "password": SECRET,
-            "host": HOST,
+            "host": POOL_HOST,
         },
         (SITES,),
     ),
@@ -974,7 +982,7 @@ ACTION_SPECS = [
             (("host", "--server"), ("database", "--dbname"), ("reindex", "--reindex")),
         ),
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "database": DATABASE_NAME,
             "reindex": ParamSpec(kind="boolean", required=False, default=False),
         },
@@ -991,7 +999,7 @@ ACTION_SPECS = [
             (("host", "--server"), ("database", "--dbname"), ("reindex", "--reindex")),
         ),
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "database": DATABASE_NAME,
             "reindex": ParamSpec(kind="boolean", required=False, default=True),
         },
@@ -1003,7 +1011,7 @@ ACTION_SPECS = [
         "critical",
         "Delete a Sphinx instance/index",
         dynamic(SPHINX, "remove", (("host", "--server"), ("database", "--dbname"))),
-        {"host": HOST, "database": DATABASE_NAME},
+        {"host": POOL_HOST, "database": DATABASE_NAME},
         (SPHINX,),
     ),
     _spec(
@@ -1013,7 +1021,7 @@ ACTION_SPECS = [
         "Add a host to the web cluster",
         web_create,
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "mode": ParamSpec(kind="enum", enum=("complete", "prepare", "finish")),
             "fstype": ParamSpec(kind="enum", enum=("csync2", "lsyncd")),
         },
@@ -1026,7 +1034,7 @@ ACTION_SPECS = [
         "critical",
         "Remove a host from the web cluster",
         dynamic(SITES, "delete_web", (("host", "--hostname"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (SITES,),
         disabled_reason="Web-node removal is disabled in BitrixEnv 9.0.10",
     ),
@@ -1137,7 +1145,7 @@ ACTION_SPECS = [
             ),
         ),
         {
-            "host": HOST,
+            "host": POOL_HOST,
             "nagios_user": HOST,
             "nagios_password": SECRET,
             "munin_user": HOST,
@@ -1180,7 +1188,7 @@ ACTION_SPECS = [
         "high",
         "Configure Node.js push service",
         dynamic(SITES, "push_configure_nodejs", (("host", "--hostname"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (SITES,),
     ),
     _spec(
@@ -1189,7 +1197,7 @@ ACTION_SPECS = [
         "critical",
         "Remove Node.js push service",
         dynamic(SITES, "push_remove_nodjs", (("host", "--hostname"),)),
-        {"host": HOST},
+        {"host": POOL_HOST},
         (SITES,),
     ),
     _spec(
@@ -1210,7 +1218,7 @@ ACTION_SPECS = [
         {
             "site": SITE,
             "root": PATH,
-            "host": HOST,
+            "host": POOL_HOST,
             "domains": ParamSpec(pattern=r"[A-Za-z0-9_.,*-]{1,2048}"),
         },
         (SITES,),
@@ -1225,7 +1233,7 @@ ACTION_SPECS = [
             "remove_transformer",
             (("site", "--site"), ("root", "--root"), ("host", "--hostname")),
         ),
-        {"site": SITE, "root": PATH, "host": HOST},
+        {"site": SITE, "root": PATH, "host": POOL_HOST},
         (SITES,),
     ),
 ]
