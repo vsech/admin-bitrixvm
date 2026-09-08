@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import jwt
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.dependencies import current_user
 from app.models import RefreshSession, User, as_utc
-from app.schemas import RefreshRequest, TokenPair, UserCreate, UserRead
+from app.schemas import ChangePassword, RefreshRequest, TokenPair, UserCreate, UserRead, UserUpdate
 from app.security import (
     create_access_token,
     create_refresh_token,
@@ -108,6 +109,52 @@ async def create_user(
     await session.commit()
     await session.refresh(user)
     return user
+
+
+@router.patch("/users/{user_id}", response_model=UserRead)
+async def update_user(
+    user_id: uuid.UUID,
+    payload: UserUpdate,
+    actor: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> User:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id != actor.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot edit other users")
+    if not verify_password(payload.current_password.get_secret_value(), user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Current password is incorrect")
+    if await session.scalar(
+        select(func.count()).select_from(User).where(User.username == payload.username, User.id != user.id)
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username already exists")
+    user.username = payload.username
+    user.updated_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+@router.post("/users/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    user_id: uuid.UUID,
+    payload: ChangePassword,
+    actor: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id != actor.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot change other users' passwords")
+    if payload.new_password.get_secret_value() != payload.confirm_password.get_secret_value():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Passwords do not match")
+    if not verify_password(payload.current_password.get_secret_value(), user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Current password is incorrect")
+    user.password_hash = hash_password(payload.new_password.get_secret_value())
+    user.updated_at = datetime.now(UTC)
+    await session.commit()
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

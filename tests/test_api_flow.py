@@ -127,3 +127,118 @@ async def test_low_risk_operation_does_not_need_preview(api_client) -> None:
         json={"parameters": {}},
     )
     assert response.status_code == 202, response.text
+
+
+async def test_update_username(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=headers,
+        json={"username": "newadmin", "current_password": "very-long-test-password"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["username"] == "newadmin"
+
+
+async def test_update_username_wrong_password(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=headers,
+        json={"username": "newadmin", "current_password": "wrong-password-123"},
+    )
+    assert response.status_code == 401
+
+
+async def test_update_username_unique_conflict(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    await client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={"username": "existing", "password": "very-long-password-123"},
+    )
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=headers,
+        json={"username": "existing", "current_password": "very-long-test-password"},
+    )
+    assert response.status_code == 409
+
+
+async def test_change_password(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.post(
+        f"/api/v1/users/{user_id}/password",
+        headers=headers,
+        json={
+            "current_password": "very-long-test-password",
+            "new_password": "brand-new-password-123",
+            "confirm_password": "brand-new-password-123",
+        },
+    )
+    assert response.status_code == 204
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "admin", "password": "brand-new-password-123"},
+    )
+    assert login.status_code == 200
+
+
+async def test_change_password_mismatch(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.post(
+        f"/api/v1/users/{user_id}/password",
+        headers=headers,
+        json={
+            "current_password": "very-long-test-password",
+            "new_password": "brand-new-password-123",
+            "confirm_password": "different-password-123",
+        },
+    )
+    assert response.status_code == 400
+
+
+async def test_change_password_wrong_current(api_client) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = me.json()["id"]
+
+    response = await client.post(
+        f"/api/v1/users/{user_id}/password",
+        headers=headers,
+        json={
+            "current_password": "wrong-current-password-123",
+            "new_password": "brand-new-password-123",
+            "confirm_password": "brand-new-password-123",
+        },
+    )
+    assert response.status_code == 401

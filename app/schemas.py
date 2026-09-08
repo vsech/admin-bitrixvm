@@ -33,6 +33,17 @@ class UserRead(ApiModel):
     created_at: datetime
 
 
+class UserUpdate(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.\-]+$")
+    current_password: SecretStr = Field(min_length=12, max_length=256)
+
+
+class ChangePassword(BaseModel):
+    current_password: SecretStr = Field(min_length=12, max_length=256)
+    new_password: SecretStr = Field(min_length=12, max_length=256)
+    confirm_password: SecretStr = Field(min_length=12, max_length=256)
+
+
 class ProbeCreate(ApiModel):
     address: str = Field(min_length=1, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
