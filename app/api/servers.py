@@ -17,6 +17,8 @@ from app.dependencies import current_user
 from app.models import Server, ServerProbe, User, as_utc
 from app.schemas import (
     CapabilityRead,
+    LogRequest,
+    LogResponse,
     ProbeCreate,
     ProbeRead,
     ServerCreate,
@@ -117,6 +119,81 @@ async def list_servers(
     _: User = Depends(current_user), session: AsyncSession = Depends(get_db)
 ) -> list[Server]:
     return list((await session.scalars(select(Server).order_by(Server.name))).all())
+
+
+LOG_SERVICES: dict[str, dict[str, Any]] = {
+    "nginx": {
+        "name": "Nginx",
+        "journal_unit": "nginx",
+        "files": [
+            "/var/log/nginx/access.log",
+            "/var/log/nginx/error.log",
+        ],
+    },
+    "php-fpm": {
+        "name": "PHP-FPM",
+        "journal_unit": "php-fpm",
+        "files": [
+            "/var/log/php-fpm/www-error.log",
+        ],
+    },
+    "mysql": {
+        "name": "MySQL",
+        "journal_unit": "mysqld",
+        "files": [
+            "/var/log/mysql/error.log",
+            "/var/log/mariadb/mariadb.log",
+        ],
+    },
+    "memcached": {
+        "name": "Memcached",
+        "journal_unit": "memcached",
+        "files": [],
+    },
+    "bitrix-pool": {
+        "name": "Bitrix Pool Manager",
+        "journal_unit": "wrapper_ansible_conf",
+        "files": [],
+    },
+    "bitrix-sites": {
+        "name": "Bitrix Sites",
+        "journal_unit": "bx-sites",
+        "files": [],
+    },
+    "bitrix-process": {
+        "name": "Bitrix Process",
+        "journal_unit": "bx-process",
+        "files": [],
+    },
+    "bitrix-sphinx": {
+        "name": "Bitrix Sphinx",
+        "journal_unit": "bx-sphinx",
+        "files": [],
+    },
+    "system": {
+        "name": "System (syslog)",
+        "journal_unit": None,
+        "files": [
+            "/var/log/messages",
+            "/var/log/secure",
+        ],
+    },
+}
+
+
+@router.get("/log-services", response_model=list[dict[str, Any]])
+async def list_log_services(
+    _: User = Depends(current_user),
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": key,
+            "name": value["name"],
+            "journal_unit": value["journal_unit"],
+            "files": value["files"],
+        }
+        for key, value in LOG_SERVICES.items()
+    ]
 
 
 @router.get("/{server_id}", response_model=ServerRead)
@@ -224,3 +301,66 @@ async def snapshot(
         return await SSHClient(server).snapshot()
     except SSHError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+@router.post("/{server_id}/logs", response_model=LogResponse)
+async def read_server_logs(
+    server_id: uuid.UUID,
+    payload: LogRequest,
+    _: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> LogResponse:
+    server = await get_server_or_404(server_id, session)
+
+    service_config = LOG_SERVICES.get(payload.service)
+    if service_config is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unknown service: {payload.service}",
+        )
+
+    if payload.source == "journal":
+        if service_config.get("journal_unit") is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Service '{payload.service}' does not support journalctl",
+            )
+        effective_service = service_config["journal_unit"]
+    elif payload.source == "file":
+        if not payload.file_path:
+            if service_config.get("files"):
+                payload.file_path = service_config["files"][0]
+            else:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"Service '{payload.service}' has no default log files",
+                )
+        effective_service = payload.service
+    else:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unsupported source: {payload.source}",
+        )
+
+    request = LogRequest(
+        service=effective_service,
+        source=payload.source,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        file_path=payload.file_path,
+        limit=payload.limit,
+        grep=payload.grep,
+    )
+
+    try:
+        lines, source_used = await SSHClient(server).read_logs(request)
+    except SSHError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    truncated = len(lines) >= payload.limit
+    return LogResponse(
+        lines=lines,
+        total=len(lines),
+        truncated=truncated,
+        source_used=source_used,
+    )

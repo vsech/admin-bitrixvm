@@ -206,6 +206,21 @@ fieldset legend { margin-bottom: 7px; color: #3b4656; font-size: 12px; font-weig
 .timeline-item div { display: grid; gap: 4px; }.timeline-item b { font-size: 11px; }.timeline-item span { color: #7e8897; font-size: 9px; }
 .skeleton-list { display: grid; gap: 1px; padding: 1px 0; }.skeleton-list i { display: block; height: 48px; background: linear-gradient(90deg, #f5f6f8 25%, #eceff3 50%, #f5f6f8 75%); background-size: 200% 100%; animation: skeleton 1.3s infinite; }
 
+.log-viewer { display: grid; gap: 0; }
+.log-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.log-controls label { display: grid; gap: 5px; color: #3b4656; font-size: 11px; font-weight: 700; }
+.log-controls select, .log-controls input { min-height: 36px; border: 1px solid #cbd2dc; border-radius: 7px; padding: 0 10px; color: var(--text); background: #fff; font-size: 12px; }
+.log-controls input[type="datetime-local"] { width: 200px; }
+.log-controls input[type="text"] { width: 160px; }
+.log-controls__actions { display: flex; gap: 8px; align-items: center; }
+.log-info { padding: 8px 18px; color: #667085; font-size: 11px; border-bottom: 1px solid var(--border); background: #fbfcfd; }
+.log-info__warn { color: var(--amber); font-weight: 600; }
+.log-output { min-height: 200px; max-height: calc(100vh - 480px); overflow: auto; background: #121b29; }
+.log-pre { margin: 0; padding: 14px 18px; color: #d8e4f2; font-size: 11px; line-height: 1.65; white-space: pre-wrap; word-break: break-all; }
+.log-loading { padding: 18px; }
+.log-loading .skeleton-list i { height: 18px; border-radius: 3px; }
+.log-empty { padding: 36px; color: #7d8796; text-align: center; font-size: 13px; }
+
 .user-grid { display: grid; grid-template-columns: 1.4fr .75fr 1fr 60px; gap: 16px; align-items: center; }
 .user-row { min-height: 68px; padding: 0 18px; border-top: 1px solid var(--border); font-size: 12px; }.user-cell { display: grid; gap: 4px; }
 .overview-lead { min-height: 190px; display: flex; align-items: center; justify-content: space-between; gap: 30px; margin-bottom: 16px; padding: 32px 38px; border-radius: 10px; color: #fff; background: #15243a; }

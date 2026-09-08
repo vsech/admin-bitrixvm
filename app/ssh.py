@@ -18,6 +18,7 @@ import asyncssh
 from app.actions import ACTIONS, BIN, ActionSpec, RemoteCommand
 from app.config import Settings, get_settings
 from app.models import Server
+from app.schemas import LogRequest
 from app.security import SecretBox
 
 logger = logging.getLogger(__name__)
@@ -331,3 +332,78 @@ class SSHClient:
                 except SSHError as exc:
                     snapshot[name] = {"error": str(exc)}
         return cast(dict[str, Any], redact(snapshot))
+
+    async def read_logs(self, request: LogRequest) -> tuple[list[str], str]:
+        date_from = request.date_from.strftime("%Y-%m-%d %H:%M:%S")
+        date_to = request.date_to.strftime("%Y-%m-%d %H:%M:%S")
+        async with self.connect() as connection:
+            if request.source == "journal":
+                return await self._read_journal_logs(
+                    connection, request.service, date_from, date_to, request.limit
+                )
+            return await self._read_file_logs(
+                connection, request.file_path or "", date_from, date_to, request.limit,
+                request.grep,
+            )
+
+    async def _read_journal_logs(
+        self,
+        connection: asyncssh.SSHClientConnection,
+        service: str,
+        date_from: str,
+        date_to: str,
+        limit: int,
+    ) -> tuple[list[str], str]:
+        argv = (
+            "/usr/bin/journalctl",
+            "-u",
+            service,
+            "--since",
+            date_from,
+            "--until",
+            date_to,
+            "--no-pager",
+            "-n",
+            str(limit),
+            "--output",
+            "short-iso",
+        )
+        result = await self.run_argv(connection, argv, timeout=60)
+        if result.exit_status != 0 and not result.stdout.strip():
+            raise SSHError(
+                f"journalctl failed (exit {result.exit_status}): {result.stderr.strip()}"
+            )
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        return lines, "journal"
+
+    async def _read_file_logs(
+        self,
+        connection: asyncssh.SSHClientConnection,
+        file_path: str,
+        date_from: str,
+        date_to: str,
+        limit: int,
+        grep: str | None,
+    ) -> tuple[list[str], str]:
+        argv_parts: list[str] = ["/usr/bin/cat"]
+        if file_path:
+            argv_parts.append(file_path)
+        else:
+            raise SSHError("file_path is required for file source")
+
+        test = await self.run_argv(connection, ("/usr/bin/test", "-r", file_path), timeout=5)
+        if test.exit_status != 0:
+            raise SSHError(f"Log file not found or not readable: {file_path}")
+
+        if grep:
+            argv_parts = ["/usr/bin/grep", "-E", grep, file_path]
+        else:
+            argv_parts = ["/usr/bin/tail", "-n", str(limit), file_path]
+
+        result = await self.run_argv(connection, tuple(argv_parts), timeout=60)
+        if result.exit_status != 0 and not result.stdout.strip():
+            raise SSHError(
+                f"Failed to read log file (exit {result.exit_status}): {result.stderr.strip()}"
+            )
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        return lines, "file"

@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { Icon } from "./Icon";
 import { ActionDialog } from "./ActionDialog";
 import { AddServerDialog } from "./AddServerDialog";
+import { LogViewer } from "./LogViewer";
 import { Modal } from "./Modal";
 
 const riskLabels = { low: "Низкий", medium: "Средний", high: "Высокий", critical: "Критический" };
@@ -29,6 +30,7 @@ export function ServerWorkspace({ servers, setServers, operations, setOperations
   const [activeAction, setActiveAction] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("capabilities");
   const selected = servers.find((item) => item.id === selectedId) || servers[0];
 
   useEffect(() => {
@@ -66,16 +68,21 @@ export function ServerWorkspace({ servers, setServers, operations, setOperations
       <div className="server-detail panel">
         <header className="detail-header"><div><h2>{selected.name}</h2><span className="status status--ok"><i/>Доступен</span></div><div className="button-group"><button className="button button--small" onClick={refreshCapabilities} disabled={loadingCapabilities}><Icon name="refresh"/>{loadingCapabilities ? "Обновляем…" : "Обновить"}</button><button className="button button--small" onClick={loadSnapshot} disabled={snapshotLoading}><Icon name="snapshot"/>{snapshotLoading ? "Собираем…" : "Снимок"}</button></div></header>
         <dl className="server-meta"><dt>Адрес</dt><dd><code>{selected.address}:{selected.port}</code></dd><dt>Пользователь</dt><dd>{selected.username}</dd><dt>SSH fingerprint</dt><dd><code title={selected.host_key_fingerprint}>{selected.host_key_fingerprint.slice(0, 29)}…</code></dd><dt>Возможности получены</dt><dd>{relativeTime(selected.capabilities_checked_at)}</dd></dl>
-        <div className="tabs" role="tablist"><button className="active">Возможности <span>{capabilities.filter((item) => item.available).length}</span></button><button onClick={loadSnapshot}>Состояние</button><button onClick={navigateOperations}>История</button></div>
+        <div className="tabs" role="tablist"><button className={activeTab === "capabilities" ? "active" : ""} onClick={() => setActiveTab("capabilities")}>Возможности <span>{capabilities.filter((item) => item.available).length}</span></button><button className={activeTab === "snapshot" ? "active" : ""} onClick={() => { setActiveTab("snapshot"); loadSnapshot(); }}>Состояние</button><button className={activeTab === "logs" ? "active" : ""} onClick={() => setActiveTab("logs")}>Логи</button><button className={activeTab === "operations" ? "active" : ""} onClick={() => { setActiveTab("operations"); navigateOperations(); }}>История</button></div>
+        {activeTab === "capabilities" && <>
         <div className="capability-tools"><div className="search search--compact"><Icon name="search"/><input value={actionSearch} onChange={(event) => setActionSearch(event.target.value)} placeholder="Найти действие" aria-label="Найти действие" /></div><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Категория"><option value="all">Все категории</option>{categories.map((item) => <option value={item} key={item}>{categoryLabels[item] || item}</option>)}</select></div>
         <div className="capability-table"><div className="capability-head"><span>Действие</span><span>Описание</span><span>Риск</span><span>Доступность</span><span/></div>{loadingCapabilities ? <div className="skeleton-list"><i/><i/><i/><i/></div> : visibleCapabilities.map((item) => <div className={`capability-row ${!item.available ? "disabled" : ""}`} key={item.action}><code>{item.action}</code><span>{summaryTranslations[item.summary] || item.summary || categoryLabels[item.category] || "Системное действие"}{item.reason ? <small>Причина: {item.reason}</small> : null}</span><span className={`risk risk--${item.risk}`}><i/>{riskLabels[item.risk]}</span><span className={item.available ? "available" : "unavailable"}>{item.available ? "Доступно" : "Недоступно"}</span><button className="button button--outline button--tiny" disabled={!item.available} onClick={() => setActiveAction({ ...item, summary: summaryTranslations[item.summary] || item.summary || item.action })}>Открыть</button></div>)}</div>
         {!loadingCapabilities && !visibleCapabilities.length ? <div className="inline-empty">Подходящие действия не найдены</div> : null}
+        </>}
+        {activeTab === "snapshot" && <>
+        {snapshot ? <div className="snapshot"><pre>{JSON.stringify(snapshot, null, 2)}</pre></div> : <div className="inline-empty">{snapshotLoading ? "Загружаем снимок…" : "Нажмите «Состояние» для загрузки"}</div>}
+        </>}
+        {activeTab === "logs" && <LogViewer server={selected} notify={notify} />}
       </div>
     </div>
     <section className="recent panel"><header><h2>Последние операции</h2><button onClick={navigateOperations}>Все операции <Icon name="chevron" size={17}/></button></header>{operations.slice(0, 3).map((operation) => <div className="recent-row" key={operation.id}><code>{operation.action}</code><span>{servers.find((server) => server.id === operation.server_id)?.name || "—"}</span><OperationStatus status={operation.status}/><time>{new Date(operation.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time></div>)}</section>
     {addOpen ? <AddServerDialog onClose={() => setAddOpen(false)} onCreated={(server) => { setServers((items) => [...items, server]); setSelectedId(server.id); }} notify={notify}/> : null}
     {activeAction ? <ActionDialog server={selected} capability={activeAction} onClose={() => setActiveAction(null)} onExecuted={(operation) => setOperations((items) => [operation, ...items])} notify={notify}/> : null}
-    {snapshot ? <Modal title="Снимок состояния" subtitle={`${selected.name} · получен только что`} onClose={() => setSnapshot(null)}><div className="modal__body snapshot"><pre>{JSON.stringify(snapshot, null, 2)}</pre></div><footer className="modal__footer"><button className="button button--primary" onClick={() => setSnapshot(null)}>Готово</button></footer></Modal> : null}
   </section>;
 }
 

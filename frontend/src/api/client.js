@@ -91,6 +91,37 @@ class ApiClient {
   capabilities(id) { return DEMO ? wait(demoCapabilities) : this.request(`/api/v1/servers/${id}/capabilities`); }
   refreshCapabilities(id) { return DEMO ? wait(demoCapabilities, 500) : this.request(`/api/v1/servers/${id}/capabilities/refresh`, { method: "POST" }); }
   snapshot(id) { return DEMO ? wait({ hostname: "bx-prod-01", platform: "AlmaLinux 9.6", bitrixenv: "9.0.10", pool: ["bx-prod-01", "bx-stage-01"], services: { nginx: "active", mysql: "active", php_fpm: "active" } }, 500) : this.request(`/api/v1/servers/${id}/snapshot`); }
+  logServices() {
+    if (DEMO) {
+      return wait([
+        { id: "nginx", name: "Nginx", journal_unit: "nginx", files: ["/var/log/nginx/access.log", "/var/log/nginx/error.log"] },
+        { id: "php-fpm", name: "PHP-FPM", journal_unit: "php-fpm", files: ["/var/log/php-fpm/www-error.log"] },
+        { id: "mysql", name: "MySQL", journal_unit: "mysqld", files: ["/var/log/mysql/error.log"] },
+        { id: "memcached", name: "Memcached", journal_unit: "memcached", files: [] },
+        { id: "bitrix-pool", name: "Bitrix Pool Manager", journal_unit: "wrapper_ansible_conf", files: [] },
+        { id: "bitrix-sites", name: "Bitrix Sites", journal_unit: "bx-sites", files: [] },
+        { id: "bitrix-process", name: "Bitrix Process", journal_unit: "bx-process", files: [] },
+        { id: "system", name: "System (syslog)", journal_unit: null, files: ["/var/log/messages", "/var/log/secure"] },
+      ]);
+    }
+    return this.request("/api/v1/servers/log-services");
+  }
+  logs(serverId, params) {
+    if (DEMO) {
+      return wait({
+        lines: [
+          "2026-09-08T10:15:01+03:00 nginx[1234]: 192.168.1.1 GET /bitrix/tools.php 200",
+          "2026-09-08T10:15:02+03:00 nginx[1234]: 192.168.1.2 POST /api/v1/auth/login 401",
+          "2026-09-08T10:15:03+03:00 nginx[1234]: 192.168.1.1 GET /local/templates/.default/header.php 200",
+          "2026-09-08T10:15:04+03:00 nginx[1234]: 192.168.1.3 GET /bitrix/cache/site1/main.js 304",
+        ],
+        total: 4,
+        truncated: false,
+        source_used: "journal",
+      });
+    }
+    return this.request(`/api/v1/servers/${serverId}/logs`, { method: "POST", body: JSON.stringify(params) });
+  }
   operations() { return DEMO ? wait(this.demoOperations) : this.request("/api/v1/operations"); }
   events(id) { return DEMO ? wait(demoEvents.map((event) => ({ ...event, operation_id: id }))) : this.request(`/api/v1/operations/${id}/events`); }
   preview(serverId, action, parameters) { return DEMO ? wait({ action, risk: demoCapabilities.find((item) => item.action === action)?.risk || "high", summary: demoCapabilities.find((item) => item.action === action)?.summary || action, warnings: action.includes("reboot") ? ["SSH-соединение будет прервано."] : [], normalized_parameters: parameters, confirmation_token: crypto.randomUUID(), expires_at: new Date(Date.now() + 300000).toISOString() }, 400) : this.request(`/api/v1/servers/${serverId}/actions/${action}/preview`, { method: "POST", body: JSON.stringify({ parameters }) }); }

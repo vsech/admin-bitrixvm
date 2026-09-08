@@ -173,6 +173,23 @@ class Page(ApiModel):
     offset: int
 
 
+class LogRequest(ApiModel):
+    service: str = Field(min_length=1, max_length=128)
+    source: Literal["journal", "file"] = "journal"
+    date_from: datetime
+    date_to: datetime
+    file_path: str | None = Field(default=None, max_length=1024)
+    limit: int = Field(default=5000, ge=1, le=50000)
+    grep: str | None = Field(default=None, max_length=512)
+
+
+class LogResponse(ApiModel):
+    lines: list[str]
+    total: int
+    truncated: bool
+    source_used: str
+
+
 class ProblemDetail(ApiModel):
     type: str = "about:blank"
     title: str
