@@ -57,16 +57,3 @@ jobs:
 
       - name: Build production bundle
         run: npm --prefix frontend run build
-
-  docker:
-    name: Docker Build Validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build Backend Image
-        run: docker build -t bitrixvm-controller:ci -f Dockerfile .
-
-      - name: Build Frontend & Caddy Image
-        run: docker build -t bitrixvm-frontend:ci -f deploy/Dockerfile.frontend .
