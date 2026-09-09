@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -16,11 +14,8 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: Build & Deploy Demo Panel
+    name: Build & Publish Demo to gh-pages
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,23 +38,9 @@ jobs:
           cp frontend/dist/index.html frontend/dist/404.html
           touch frontend/dist/.nojekyll
 
-      # 1) Публикация в ветку gh-pages (для совместимости со стандартным режимом Pages)
       - name: Publish to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./frontend/dist
           publish_branch: gh-pages
-
-      # 2) Нативная публикация в GitHub Pages через Actions
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./frontend/dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
