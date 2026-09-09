@@ -194,7 +194,7 @@ function downloadLogs() {
         </div>
 
         <!-- Action Buttons -->
-        <div class="flex items-center gap-2 justify-end">
+        <div class="flex items-center gap-2 justify-end flex-wrap">
           <B24Button
             label="Загрузить логи"
             :icon="RefreshIcon"

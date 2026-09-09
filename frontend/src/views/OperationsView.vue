@@ -131,7 +131,7 @@ async function handleRefresh() {
     </div>
 
     <!-- Filter Tabs -->
-    <div class="flex items-center gap-2 overflow-x-auto pb-2 border-b border-muted">
+    <div class="flex items-center gap-2 overflow-x-auto pb-3 border-b border-muted">
       <B24Button
         v-for="tab in filterOptions"
         :key="tab.id"
@@ -144,7 +144,7 @@ async function handleRefresh() {
     </div>
 
     <!-- Operations Table Card -->
-    <B24Card class="border border-muted overflow-hidden">
+    <B24Card class="border border-muted overflow-hidden" :b24ui="{ body: '!p-0' }">
       <div v-if="visibleOperations.length" class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="bg-elevated/80 border-b border-muted text-xs font-semibold text-muted uppercase tracking-wider">
@@ -205,6 +205,7 @@ async function handleRefresh() {
       v-model:open="detailModalOpen"
       :title="selected.action"
       :description="`Операция ${selected.id}`"
+      :b24ui="{ content: 'max-w-2xl' }"
     >
       <template #body>
         <div class="space-y-6">

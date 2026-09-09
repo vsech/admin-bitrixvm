@@ -311,7 +311,7 @@ function handleTabChange(tab) {
     </B24Card>
 
     <!-- Full-width Server Workspace -->
-    <B24Card v-else-if="selected" class="border border-muted space-y-6">
+    <B24Card v-else-if="selected" class="border border-muted" :b24ui="{ header: 'border-b border-muted' }">
       <template #header>
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
           <div class="flex items-center gap-3 min-w-0">
@@ -331,29 +331,30 @@ function handleTabChange(tab) {
             </div>
           </div>
 
-            <div class="flex items-center gap-2">
-              <B24Button
-                label="Обновить"
-                :icon="RefreshIcon"
-                color="air-secondary-no-accent"
-                variant="outline"
-                size="sm"
-                :loading="loadingCapabilities"
-                @click="refreshCapabilities"
-              />
-              <B24Button
-                label="Снимок"
-                :icon="FileIcon"
-                color="air-secondary-no-accent"
-                variant="outline"
-                size="sm"
-                :loading="snapshotLoading"
-                @click="loadSnapshot"
-              />
-            </div>
+          <div class="flex items-center gap-2">
+            <B24Button
+              label="Обновить"
+              :icon="RefreshIcon"
+              color="air-secondary-no-accent"
+              variant="outline"
+              size="sm"
+              :loading="loadingCapabilities"
+              @click="refreshCapabilities"
+            />
+            <B24Button
+              label="Снимок"
+              :icon="FileIcon"
+              color="air-secondary-no-accent"
+              variant="outline"
+              size="sm"
+              :loading="snapshotLoading"
+              @click="loadSnapshot"
+            />
           </div>
-        </template>
+        </div>
+      </template>
 
+      <div class="space-y-6">
         <!-- Meta list -->
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-elevated/50 border border-muted text-xs">
           <div>
@@ -377,7 +378,7 @@ function handleTabChange(tab) {
         </div>
 
         <!-- Custom Tabs Switcher -->
-        <div class="flex items-center gap-2 border-b border-muted pb-2">
+        <div class="flex items-center gap-2 border-b border-muted pb-3 overflow-x-auto">
           <B24Button
             v-for="tab in tabItems"
             :key="tab.value"
@@ -478,10 +479,11 @@ function handleTabChange(tab) {
         <div v-else-if="activeTab === 'logs'">
           <LogViewer :server="selected" />
         </div>
-      </B24Card>
+      </div>
+    </B24Card>
 
     <!-- Recent Operations Strip -->
-    <B24Card class="border border-muted">
+    <B24Card class="border border-muted" :b24ui="{ header: 'border-b border-muted' }">
       <template #header>
         <div class="flex items-center justify-between">
           <h3 class="font-bold text-label text-base">Последние операции</h3>

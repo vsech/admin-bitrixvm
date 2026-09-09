@@ -144,6 +144,7 @@ async function executeAction() {
     :open="open"
     :title="capability.summary || capability.action"
     :description="`${server.name} · ${capability.action}`"
+    :b24ui="{ content: 'max-w-2xl' }"
     @update:open="emit('update:open', $event)"
   >
     <template #body>

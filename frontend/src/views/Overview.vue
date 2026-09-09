@@ -60,7 +60,7 @@ function getOperationServerName(serverId) {
     <!-- Two Column Grid -->
     <div class="grid md:grid-cols-2 gap-6">
       <!-- Infrastructure Card -->
-      <B24Card class="border border-muted flex flex-col">
+      <B24Card class="border border-muted flex flex-col" :b24ui="{ header: 'border-b border-muted' }">
         <template #header>
           <div class="flex items-center justify-between">
             <h3 class="font-bold text-label text-base">Инфраструктура</h3>
@@ -101,7 +101,7 @@ function getOperationServerName(serverId) {
       </B24Card>
 
       <!-- Active Operations Card -->
-      <B24Card class="border border-muted flex flex-col">
+      <B24Card class="border border-muted flex flex-col" :b24ui="{ header: 'border-b border-muted' }">
         <template #header>
           <div class="flex items-center justify-between">
             <h3 class="font-bold text-label text-base">Активные операции</h3>

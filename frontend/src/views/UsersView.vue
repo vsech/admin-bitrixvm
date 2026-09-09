@@ -200,7 +200,7 @@ async function handleConfirmDisable() {
     </div>
 
     <!-- Users Table Card -->
-    <B24Card class="border border-muted overflow-hidden">
+    <B24Card class="border border-muted overflow-hidden" :b24ui="{ body: '!p-0' }">
       <div v-if="loading" class="p-8 text-center text-sm text-muted">
         Загрузка списка пользователей…
       </div>
