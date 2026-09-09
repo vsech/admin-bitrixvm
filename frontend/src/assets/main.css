@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "@bitrix24/b24ui-nuxt";
+
+/* Mono fonts for code snippets and log terminal */
+code, pre, .terminal-output {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Monaco, monospace;
+}
