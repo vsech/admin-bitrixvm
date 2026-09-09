@@ -91,20 +91,26 @@ class ApiClient {
   capabilities(id) { return DEMO ? wait(demoCapabilities) : this.request(`/api/v1/servers/${id}/capabilities`); }
   refreshCapabilities(id) { return DEMO ? wait(demoCapabilities, 500) : this.request(`/api/v1/servers/${id}/capabilities/refresh`, { method: "POST" }); }
   snapshot(id) { return DEMO ? wait({ hostname: "bx-prod-01", platform: "AlmaLinux 9.6", bitrixenv: "9.0.10", pool: ["bx-prod-01", "bx-stage-01"], services: { nginx: "active", mysql: "active", php_fpm: "active" } }, 500) : this.request(`/api/v1/servers/${id}/snapshot`); }
-  logServices() {
+  logServices(serverId) {
     if (DEMO) {
       return wait([
-        { id: "nginx", name: "Nginx", journal_unit: "nginx", files: ["/var/log/nginx/access.log", "/var/log/nginx/error.log"] },
-        { id: "php-fpm", name: "PHP-FPM", journal_unit: "php-fpm", files: ["/var/log/php-fpm/www-error.log"] },
-        { id: "mysql", name: "MySQL", journal_unit: "mysqld", files: ["/var/log/mysql/error.log"] },
-        { id: "memcached", name: "Memcached", journal_unit: "memcached", files: [] },
-        { id: "bitrix-pool", name: "Bitrix Pool Manager", journal_unit: "wrapper_ansible_conf", files: [] },
-        { id: "bitrix-sites", name: "Bitrix Sites", journal_unit: "bx-sites", files: [] },
-        { id: "bitrix-process", name: "Bitrix Process", journal_unit: "bx-process", files: [] },
-        { id: "system", name: "System (syslog)", journal_unit: null, files: ["/var/log/messages", "/var/log/secure"] },
+        { id: "nginx", name: "Nginx (HTTP/HTTPS)", journal_unit: "nginx", files: ["/var/log/nginx/error.log", "/var/log/nginx/access.log"], active: true },
+        { id: "httpd", name: "Apache (httpd / PHP)", journal_unit: "httpd", files: ["/var/log/httpd/error_log", "/var/log/httpd/access_log"], active: true },
+        { id: "bitrix-manager", name: "BitrixVM Управление", journal_unit: null, files: ["/opt/webdir/logs/wrapper.log", "/opt/webdir/logs/bvat.log"], active: true },
+        { id: "push-server", name: "Bitrix Push Server (RTC)", journal_unit: "push-server", files: ["/var/log/push-server/error.log", "/var/log/push-server/info.log"], active: true },
+        { id: "mysql", name: "MySQL / Percona / MariaDB", journal_unit: "mysqld", files: ["/var/log/mysqld.log", "/var/log/mysql/error.log"], active: true },
+        { id: "redis", name: "Redis", journal_unit: "redis", files: ["/var/log/redis/redis.log"], active: true },
+        { id: "memcached", name: "Memcached", journal_unit: "memcached", files: [], active: true },
+        { id: "cron", name: "Cron (Задачи Bitrix)", journal_unit: "crond", files: ["/var/log/cron"], active: true },
+        { id: "bvat", name: "Bitrix-Env Auto-tuning (BVAT)", journal_unit: "bvat", files: ["/opt/webdir/logs/bvat.log"], active: true },
+        { id: "php-fpm", name: "PHP-FPM", journal_unit: "php-fpm", files: ["/var/log/php-fpm/www-error.log"], active: false },
+        { id: "mail", name: "Почта (msmtp / maillog)", journal_unit: null, files: ["/var/log/maillog"], active: null },
+        { id: "system", name: "Система (syslog / auth)", journal_unit: "_system", files: ["/var/log/messages", "/var/log/secure", "/var/log/dnf.log"], active: null },
+        { id: "custom", name: "Пользовательский файл", journal_unit: null, files: [], active: null },
       ]);
     }
-    return this.request("/api/v1/servers/log-services");
+    const url = serverId ? `/api/v1/servers/${serverId}/log-services` : "/api/v1/servers/log-services";
+    return this.request(url);
   }
   logs(serverId, params) {
     if (DEMO) {

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { api } from "../api/client";
 import DownloadIcon from "@bitrix24/b24icons-vue/outline/DownloadIcon";
 import RefreshIcon from "@bitrix24/b24icons-vue/outline/RefreshIcon";
@@ -22,21 +22,37 @@ function toLocalDatetimeString(date) {
 const services = ref([]);
 const service = ref("");
 const source = ref("journal");
-const dateFrom = ref(toLocalDatetimeString(Date.now() - 3600000));
+const dateFrom = ref(toLocalDatetimeString(Date.now() - 3600000 * 24));
 const dateTo = ref(toLocalDatetimeString(Date.now()));
 const filePath = ref("");
 const grep = ref("");
+const limit = ref(5000);
 const lines = ref([]);
 const total = ref(0);
 const truncated = ref(false);
+const sourceUsed = ref("");
 const loading = ref(false);
 const loaded = ref(false);
+const autoRefresh = ref(false);
+let autoRefreshTimer = null;
 
-onMounted(async () => {
+const limitOptions = [
+  { label: "100 строк", value: 100 },
+  { label: "500 строк", value: 500 },
+  { label: "1 000 строк", value: 1000 },
+  { label: "5 000 строк", value: 5000 },
+  { label: "10 000 строк", value: 10000 },
+];
+
+async function loadServices() {
+  if (!props.server?.id) return;
   try {
-    services.value = await api.logServices();
-    if (services.value.length > 0 && !service.value) {
-      service.value = services.value[0].id;
+    services.value = await api.logServices(props.server.id);
+    if (services.value.length > 0) {
+      const existing = services.value.find((s) => s.id === service.value);
+      if (!existing) {
+        service.value = services.value[0].id;
+      }
     }
   } catch (err) {
     toast.add({
@@ -45,6 +61,23 @@ onMounted(async () => {
       color: "air-primary-alert",
     });
   }
+}
+
+onMounted(() => {
+  loadServices();
+});
+
+watch(
+  () => props.server?.id,
+  () => {
+    loadServices();
+  }
+);
+
+onUnmounted(() => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+  }
 });
 
 const selectedService = computed(() =>
@@ -52,7 +85,15 @@ const selectedService = computed(() =>
 );
 
 const serviceOptions = computed(() =>
-  services.value.map((s) => ({ label: s.name, value: s.id }))
+  services.value.map((s) => {
+    let label = s.name;
+    if (s.active === true) {
+      label += " (активен)";
+    } else if (s.active === false) {
+      label += " (неактивен)";
+    }
+    return { label, value: s.id };
+  })
 );
 
 const sourceOptions = computed(() => {
@@ -60,7 +101,12 @@ const sourceOptions = computed(() => {
   if (selectedService.value?.journal_unit) {
     opts.push({ label: "journalctl", value: "journal" });
   }
-  opts.push({ label: "Файл лога", value: "file" });
+  if (selectedService.value?.files?.length > 0 || service.value === "custom") {
+    opts.push({ label: "Файл лога", value: "file" });
+  }
+  if (opts.length === 0) {
+    opts.push({ label: "Файл лога", value: "file" });
+  }
   return opts;
 });
 
@@ -69,49 +115,84 @@ const fileOptions = computed(() =>
 );
 
 watch(selectedService, (s) => {
-  if (s && s.files.length > 0) {
+  if (!s) return;
+  if (s.files && s.files.length > 0) {
     filePath.value = s.files[0];
-  } else {
+  } else if (s.id !== "custom") {
     filePath.value = "";
   }
-  if (s) {
-    source.value = s.journal_unit ? "journal" : "file";
+  if (s.journal_unit) {
+    source.value = "journal";
+  } else {
+    source.value = "file";
   }
 });
 
-async function fetchLogs() {
+watch(autoRefresh, (enabled) => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (enabled) {
+    autoRefreshTimer = setInterval(() => {
+      if (!loading.value && service.value) {
+        fetchLogs(true);
+      }
+    }, 5000);
+  }
+});
+
+async function fetchLogs(silent = false) {
   if (!service.value) {
-    toast.add({
-      title: "Выберите сервис",
-      color: "air-primary-warning",
-    });
+    if (!silent) {
+      toast.add({
+        title: "Выберите сервис",
+        color: "air-primary-warning",
+      });
+    }
     return;
   }
 
-  loading.value = true;
-  loaded.value = false;
+  if (source.value === "file" && service.value === "custom" && !filePath.value) {
+    if (!silent) {
+      toast.add({
+        title: "Укажите путь к файлу лога",
+        color: "air-primary-warning",
+      });
+    }
+    return;
+  }
+
+  if (!silent) {
+    loading.value = true;
+  }
   try {
     const result = await api.logs(props.server.id, {
       service: service.value,
       source: source.value,
-      date_from: new Date(dateFrom.value).toISOString(),
-      date_to: new Date(dateTo.value).toISOString(),
+      date_from: source.value === "journal" ? new Date(dateFrom.value).toISOString() : null,
+      date_to: source.value === "journal" ? new Date(dateTo.value).toISOString() : null,
       file_path: source.value === "file" ? filePath.value : null,
       grep: grep.value || null,
-      limit: 5000,
+      limit: Number(limit.value) || 5000,
     });
     lines.value = result.lines || [];
     total.value = result.total || 0;
     truncated.value = result.truncated || false;
+    sourceUsed.value = result.source_used || source.value;
     loaded.value = true;
   } catch (err) {
-    toast.add({
-      title: "Ошибка получения логов",
-      description: err.message,
-      color: "air-primary-alert",
-    });
+    if (!silent) {
+      toast.add({
+        title: "Ошибка получения логов",
+        description: err.message,
+        color: "air-primary-alert",
+      });
+    }
   } finally {
-    loading.value = false;
+    if (!silent) {
+      loading.value = false;
+    }
   }
 }
 
@@ -121,7 +202,7 @@ function downloadLogs() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${props.server.name}_${service.value}_${new Date().toISOString().slice(0, 10)}.log`;
+  a.download = `${props.server?.name || "server"}_${service.value}_${new Date().toISOString().slice(0, 10)}.log`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -133,7 +214,7 @@ function downloadLogs() {
     <div class="p-4 rounded-xl bg-elevated/50 border border-muted space-y-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Service -->
-        <B24FormField label="Сервис" required>
+        <B24FormField label="Сервис / Источник" required>
           <B24Select
             v-model="service"
             :items="serviceOptions"
@@ -143,7 +224,7 @@ function downloadLogs() {
         </B24FormField>
 
         <!-- Source -->
-        <B24FormField label="Источник">
+        <B24FormField label="Режим">
           <B24Select
             v-model="source"
             :items="sourceOptions"
@@ -152,64 +233,102 @@ function downloadLogs() {
         </B24FormField>
 
         <!-- Date From -->
-        <B24FormField label="С даты">
+        <B24FormField label="С даты" :description="source === 'file' ? 'Только для journalctl' : undefined">
           <B24Input
             v-model="dateFrom"
             type="datetime-local"
+            :disabled="source === 'file'"
             class="w-full"
           />
         </B24FormField>
 
         <!-- Date To -->
-        <B24FormField label="По дату">
+        <B24FormField label="По дату" :description="source === 'file' ? 'Только для journalctl' : undefined">
           <B24Input
             v-model="dateTo"
             type="datetime-local"
+            :disabled="source === 'file'"
             class="w-full"
           />
         </B24FormField>
       </div>
 
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+      <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
         <!-- Log File (if file source) -->
-        <div v-if="source === 'file' && fileOptions.length > 0" class="sm:col-span-1">
-          <B24FormField label="Файл">
+        <div v-if="source === 'file'" class="sm:col-span-5">
+          <B24FormField label="Файл лога" required>
+            <B24Input
+              v-if="service === 'custom'"
+              v-model="filePath"
+              placeholder="/var/log/... или /opt/webdir/logs/..."
+              class="w-full font-mono text-xs"
+              @keyup.enter="fetchLogs(false)"
+            />
             <B24Select
+              v-else-if="fileOptions.length > 0"
               v-model="filePath"
               :items="fileOptions"
               class="w-full font-mono text-xs"
             />
+            <div v-else class="text-xs text-muted py-2">
+              У сервиса нет стандартных файлов логов
+            </div>
           </B24FormField>
         </div>
 
         <!-- Grep Pattern -->
-        <div :class="source === 'file' && fileOptions.length > 0 ? 'sm:col-span-1' : 'sm:col-span-2'">
-          <B24FormField label="Grep фильтр">
+        <div :class="source === 'file' ? 'sm:col-span-4' : 'sm:col-span-8'">
+          <B24FormField label="Grep фильтр (regex / подстрока)">
             <B24Input
               v-model="grep"
-              placeholder="Шаблон регулярного выражения или подстрока"
+              placeholder="Например: error, 404, bxcv.ru..."
               class="w-full font-mono text-xs"
+              @keyup.enter="fetchLogs(false)"
             />
           </B24FormField>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="flex items-center gap-2 justify-end flex-wrap">
-          <B24Button
-            label="Загрузить логи"
-            :icon="RefreshIcon"
-            color="air-primary"
-            :loading="loading"
-            @click="fetchLogs"
-          />
-          <B24Button
-            v-if="loaded && lines.length > 0"
-            label="Скачать"
-            :icon="DownloadIcon"
-            color="air-secondary-no-accent"
-            variant="outline"
-            @click="downloadLogs"
-          />
+        <!-- Limit -->
+        <div class="sm:col-span-3">
+          <B24FormField label="Количество строк">
+            <B24Select
+              v-model="limit"
+              :items="limitOptions"
+              class="w-full text-xs"
+            />
+          </B24FormField>
+        </div>
+
+        <!-- Action Buttons & Auto refresh -->
+        <div class="sm:col-span-12 flex items-center justify-between pt-2 border-t border-muted/30 flex-wrap gap-3">
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 cursor-pointer text-xs select-none">
+              <input
+                v-model="autoRefresh"
+                type="checkbox"
+                class="rounded border-muted text-primary focus:ring-primary h-4 w-4"
+              />
+              <span :class="autoRefresh ? 'text-primary font-medium' : 'text-muted'">Авто-обновление (каждые 5 сек)</span>
+            </label>
+          </div>
+
+          <div class="flex items-center gap-2 flex-wrap">
+            <B24Button
+              label="Загрузить логи"
+              :icon="RefreshIcon"
+              color="air-primary"
+              :loading="loading"
+              @click="fetchLogs(false)"
+            />
+            <B24Button
+              v-if="loaded && lines.length > 0"
+              label="Скачать"
+              :icon="DownloadIcon"
+              color="air-secondary-no-accent"
+              variant="outline"
+              @click="downloadLogs"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -218,9 +337,9 @@ function downloadLogs() {
     <div v-if="loaded" class="flex items-center justify-between px-2 text-xs text-muted">
       <span>Найдено строк: <b class="text-label">{{ total }}</b></span>
       <span v-if="truncated" class="text-[var(--ui-color-design-filled-amber)]">
-        (Вывод ограничен первыми 5000 строками)
+        (Вывод ограничен последними {{ limit }} строками)
       </span>
-      <span>Источник: <code class="font-mono text-xs">{{ lines[0]?.includes("journalctl") ? "journalctl" : source }}</code></span>
+      <span>Источник: <code class="font-mono text-xs">{{ sourceUsed }}</code></span>
     </div>
 
     <!-- Terminal Output -->
@@ -234,11 +353,11 @@ function downloadLogs() {
       </div>
 
       <div v-else-if="loaded" class="p-12 text-center text-sm text-muted">
-        Записи в журнале за указанный период не найдены
+        Записи в журнале за указанный период или по фильтру не найдены
       </div>
 
       <div v-else class="p-12 text-center text-sm text-muted">
-        Выберите сервис, временной интервал и нажмите «Загрузить логи»
+        Выберите сервис, режим и нажмите «Загрузить логи»
       </div>
     </div>
   </div>

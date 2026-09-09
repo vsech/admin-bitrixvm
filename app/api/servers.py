@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -19,14 +20,16 @@ from app.schemas import (
     CapabilityRead,
     LogRequest,
     LogResponse,
+    LogServiceInfo,
     ProbeCreate,
     ProbeRead,
     ServerCreate,
     ServerRead,
 )
 from app.security import SecretBox
-from app.ssh import SSHClient, SSHError, probe_host_key
+from app.ssh import SSHClient, SSHError, probe_host_key, validate_log_file_path
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/servers", tags=["servers"])
 POOL_HOST_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,253}")
 
@@ -123,11 +126,74 @@ async def list_servers(
 
 LOG_SERVICES: dict[str, dict[str, Any]] = {
     "nginx": {
-        "name": "Nginx",
+        "name": "Nginx (HTTP/HTTPS)",
         "journal_unit": "nginx",
         "files": [
-            "/var/log/nginx/access.log",
             "/var/log/nginx/error.log",
+            "/var/log/nginx/access.log",
+        ],
+    },
+    "httpd": {
+        "name": "Apache (httpd / PHP)",
+        "journal_unit": "httpd",
+        "files": [
+            "/var/log/httpd/error_log",
+            "/var/log/httpd/access_log",
+        ],
+    },
+    "bitrix-manager": {
+        "name": "BitrixVM Управление",
+        "journal_unit": None,
+        "files": [
+            "/opt/webdir/logs/wrapper.log",
+            "/opt/webdir/logs/bvat.log",
+            "/opt/webdir/logs/bxSiteNew.debug",
+            "/opt/webdir/logs/pool_manage.debug",
+            "/opt/webdir/logs/bxMysql.debug",
+            "/opt/webdir/logs/install-9.0.10.log",
+        ],
+    },
+    "push-server": {
+        "name": "Bitrix Push Server (RTC)",
+        "journal_unit": "push-server",
+        "files": [
+            "/var/log/push-server/error.log",
+            "/var/log/push-server/info.log",
+        ],
+    },
+    "mysql": {
+        "name": "MySQL / Percona / MariaDB",
+        "journal_unit": "mysqld",
+        "files": [
+            "/var/log/mysqld.log",
+            "/var/log/mysql/error.log",
+            "/var/log/mariadb/mariadb.log",
+        ],
+    },
+    "redis": {
+        "name": "Redis",
+        "journal_unit": "redis",
+        "files": [
+            "/var/log/redis/redis.log",
+        ],
+    },
+    "memcached": {
+        "name": "Memcached",
+        "journal_unit": "memcached",
+        "files": [],
+    },
+    "cron": {
+        "name": "Cron (Задачи Bitrix)",
+        "journal_unit": "crond",
+        "files": [
+            "/var/log/cron",
+        ],
+    },
+    "bvat": {
+        "name": "Bitrix-Env Auto-tuning (BVAT)",
+        "journal_unit": "bvat",
+        "files": [
+            "/opt/webdir/logs/bvat.log",
         ],
     },
     "php-fpm": {
@@ -137,63 +203,55 @@ LOG_SERVICES: dict[str, dict[str, Any]] = {
             "/var/log/php-fpm/www-error.log",
         ],
     },
-    "mysql": {
-        "name": "MySQL",
-        "journal_unit": "mysqld",
+    "mail": {
+        "name": "Почта (msmtp / maillog)",
+        "journal_unit": None,
         "files": [
-            "/var/log/mysql/error.log",
-            "/var/log/mariadb/mariadb.log",
+            "/var/log/maillog",
         ],
     },
-    "memcached": {
-        "name": "Memcached",
-        "journal_unit": "memcached",
-        "files": [],
-    },
-    "bitrix-pool": {
-        "name": "Bitrix Pool Manager",
-        "journal_unit": "wrapper_ansible_conf",
-        "files": [],
-    },
-    "bitrix-sites": {
-        "name": "Bitrix Sites",
-        "journal_unit": "bx-sites",
-        "files": [],
-    },
-    "bitrix-process": {
-        "name": "Bitrix Process",
-        "journal_unit": "bx-process",
-        "files": [],
-    },
-    "bitrix-sphinx": {
-        "name": "Bitrix Sphinx",
-        "journal_unit": "bx-sphinx",
-        "files": [],
-    },
     "system": {
-        "name": "System (syslog)",
-        "journal_unit": None,
+        "name": "Система (syslog / auth)",
+        "journal_unit": "_system",
         "files": [
             "/var/log/messages",
             "/var/log/secure",
+            "/var/log/dnf.log",
         ],
+    },
+    "custom": {
+        "name": "Пользовательский файл",
+        "journal_unit": None,
+        "files": [],
     },
 }
 
+SERVICE_ALIASES: dict[str, str] = {
+    "bitrix-pool": "bitrix-manager",
+    "bitrix-sites": "bitrix-manager",
+    "bitrix-process": "bitrix-manager",
+    "bitrix-sphinx": "bitrix-manager",
+}
 
-@router.get("/log-services", response_model=list[dict[str, Any]])
-async def list_log_services(
-    _: User = Depends(current_user),
-) -> list[dict[str, Any]]:
+
+def get_default_log_services() -> list[dict[str, Any]]:
     return [
         {
             "id": key,
             "name": value["name"],
             "journal_unit": value["journal_unit"],
             "files": value["files"],
+            "active": None,
         }
         for key, value in LOG_SERVICES.items()
     ]
+
+
+@router.get("/log-services", response_model=list[LogServiceInfo])
+async def list_log_services(
+    _: User = Depends(current_user),
+) -> list[dict[str, Any]]:
+    return get_default_log_services()
 
 
 @router.get("/{server_id}", response_model=ServerRead)
@@ -303,6 +361,22 @@ async def snapshot(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
+@router.get("/{server_id}/log-services", response_model=list[LogServiceInfo])
+async def list_server_log_services(
+    server_id: uuid.UUID,
+    _: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    server = await get_server_or_404(server_id, session)
+    try:
+        discovered = await SSHClient(server).discover_log_services()
+        if discovered:
+            return discovered
+    except Exception as exc:
+        logger.warning("Dynamic log discovery failed for server %s: %s", server_id, exc)
+    return get_default_log_services()
+
+
 @router.post("/{server_id}/logs", response_model=LogResponse)
 async def read_server_logs(
     server_id: uuid.UUID,
@@ -312,42 +386,67 @@ async def read_server_logs(
 ) -> LogResponse:
     server = await get_server_or_404(server_id, session)
 
-    service_config = LOG_SERVICES.get(payload.service)
-    if service_config is None:
+    service_id = SERVICE_ALIASES.get(payload.service, payload.service)
+    service_config = LOG_SERVICES.get(service_id)
+
+    if service_id == "custom":
+        if payload.source != "file":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Custom log source only supports file reading",
+            )
+        if not payload.file_path:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "file_path is required for custom log source",
+            )
+        try:
+            validated_path = validate_log_file_path(payload.file_path)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        effective_service = "custom"
+        effective_file_path = validated_path
+    elif service_config is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unknown service: {payload.service}",
         )
-
-    if payload.source == "journal":
-        if service_config.get("journal_unit") is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"Service '{payload.service}' does not support journalctl",
-            )
-        effective_service = service_config["journal_unit"]
-    elif payload.source == "file":
-        if not payload.file_path:
-            if service_config.get("files"):
-                payload.file_path = service_config["files"][0]
-            else:
+    else:
+        if payload.source == "journal":
+            if service_config.get("journal_unit") is None:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    f"Service '{payload.service}' has no default log files",
+                    f"Service '{payload.service}' does not support journalctl",
                 )
-        effective_service = payload.service
-    else:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Unsupported source: {payload.source}",
-        )
+            effective_service = service_config["journal_unit"]
+            effective_file_path = None
+        elif payload.source == "file":
+            effective_file_path = payload.file_path
+            if not effective_file_path:
+                if service_config.get("files"):
+                    effective_file_path = service_config["files"][0]
+                else:
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        f"Service '{payload.service}' has no default log files",
+                    )
+            try:
+                effective_file_path = validate_log_file_path(effective_file_path)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+            effective_service = service_id
+        else:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Unsupported source: {payload.source}",
+            )
 
     request = LogRequest(
         service=effective_service,
         source=payload.source,
         date_from=payload.date_from,
         date_to=payload.date_to,
-        file_path=payload.file_path,
+        file_path=effective_file_path,
         limit=payload.limit,
         grep=payload.grep,
     )

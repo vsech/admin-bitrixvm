@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import shlex
 import tempfile
@@ -11,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import asyncssh
@@ -98,6 +100,63 @@ async def probe_host_key(address: str, port: int, timeout: float = 10) -> tuple[
     exported = key.export_public_key("openssh").decode().strip()
     fingerprint = key.get_fingerprint("sha256")
     return exported, fingerprint, key.get_algorithm()
+
+
+ALLOWED_LOG_PREFIXES = (
+    "/var/log/",
+    "/opt/webdir/logs/",
+    "/home/bitrix/",
+    "/tmp/php_sessions/",
+    "/tmp/php_upload/",
+)
+
+FORBIDDEN_FILE_SUBSTRINGS = (
+    "/etc/",
+    "/proc/",
+    "/sys/",
+    "/dev/",
+    "/root/",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "authorized_keys",
+    "known_hosts",
+    "shadow",
+    "master_key",
+)
+
+
+def validate_log_file_path(file_path: str) -> str:
+    if not file_path or not isinstance(file_path, str):
+        raise ValueError("file_path is required for file source")
+    path = file_path.strip()
+    if "\x00" in path:
+        raise ValueError("Invalid file path")
+    normalized = os.path.normpath(path)
+    if not normalized.startswith("/"):
+        raise ValueError("file_path must be an absolute path")
+    if not any(normalized.startswith(prefix) for prefix in ALLOWED_LOG_PREFIXES):
+        raise ValueError(
+            f"Access denied: file must be located in allowed directories ({', '.join(ALLOWED_LOG_PREFIXES)})"
+        )
+    for forbidden in FORBIDDEN_FILE_SUBSTRINGS:
+        if forbidden in normalized:
+            raise ValueError(f"Access to sensitive file path containing '{forbidden}' is forbidden")
+    return normalized
+
+
+def is_active_log_file(file_path: str) -> bool:
+    name = file_path.rsplit("/", 1)[-1]
+    if not name:
+        return False
+    if name.endswith((".gz", ".xz", ".bz2", ".zip", ".rpmnew", ".rpmsave", "~")):
+        return False
+    if re.search(r"[-._]\d{6,}$", name):
+        return False
+    if re.search(r"\.\d+$", name):
+        return False
+    return True
 
 
 class SSHClient:
@@ -333,13 +392,162 @@ class SSHClient:
                     snapshot[name] = {"error": str(exc)}
         return cast(dict[str, Any], redact(snapshot))
 
+    async def discover_log_services(self) -> list[dict[str, Any]]:
+        find_cmd = (
+            "/usr/bin/find /var/log/nginx /var/log/httpd /var/log/push-server "
+            "/var/log/redis /opt/webdir/logs /var/log/mysql -maxdepth 1 -type f 2>/dev/null ; "
+            "echo '---SERVICES---' ; "
+            "/usr/bin/systemctl is-active httpd nginx mysqld redis memcached push-server bvat crond php-fpm 2>/dev/null"
+        )
+        try:
+            async with self.connect() as connection:
+                result = await connection.run(find_cmd, check=False, encoding="utf-8")
+                raw = str(result.stdout)
+        except SSHError:
+            return []
+
+        files_part, _, services_part = raw.partition("---SERVICES---")
+        raw_files = [f.strip() for f in files_part.splitlines() if f.strip()]
+        active_files = [f for f in raw_files if is_active_log_file(f)]
+
+        service_states = [s.strip() for s in services_part.splitlines() if s.strip()]
+        service_names = [
+            "httpd", "nginx", "mysqld", "redis", "memcached", "push-server", "bvat", "crond", "php-fpm"
+        ]
+        active_map = {
+            name: (service_states[i] == "active" if i < len(service_states) else None)
+            for i, name in enumerate(service_names)
+        }
+
+        nginx_files = [f for f in active_files if f.startswith("/var/log/nginx/")]
+        nginx_files.sort(key=lambda x: (0 if "error.log" in x else (1 if "access.log" in x else 2), x))
+
+        httpd_files = [f for f in active_files if f.startswith("/var/log/httpd/")]
+        httpd_files.sort(key=lambda x: (0 if "error_log" in x else (1 if "access_log" in x else 2), x))
+
+        push_files = [f for f in active_files if f.startswith("/var/log/push-server/")]
+        push_files.sort(key=lambda x: (0 if "error.log" in x else 1, x))
+
+        redis_files = [f for f in active_files if f.startswith("/var/log/redis/")]
+
+        webdir_files = [f for f in active_files if f.startswith("/opt/webdir/logs/")]
+        webdir_files.sort(key=lambda x: (0 if "wrapper.log" in x else (1 if "bvat.log" in x else 2), x))
+
+        mysql_files = [f for f in active_files if f.startswith("/var/log/mysql/")]
+
+        return [
+            {
+                "id": "nginx",
+                "name": "Nginx (HTTP/HTTPS)",
+                "journal_unit": "nginx",
+                "files": nginx_files or ["/var/log/nginx/error.log", "/var/log/nginx/access.log"],
+                "active": active_map.get("nginx"),
+            },
+            {
+                "id": "httpd",
+                "name": "Apache (httpd / PHP)",
+                "journal_unit": "httpd",
+                "files": httpd_files or ["/var/log/httpd/error_log", "/var/log/httpd/access_log"],
+                "active": active_map.get("httpd"),
+            },
+            {
+                "id": "bitrix-manager",
+                "name": "BitrixVM Управление",
+                "journal_unit": None,
+                "files": webdir_files or ["/opt/webdir/logs/wrapper.log", "/opt/webdir/logs/bvat.log"],
+                "active": True,
+            },
+            {
+                "id": "push-server",
+                "name": "Bitrix Push Server (RTC)",
+                "journal_unit": "push-server",
+                "files": push_files or ["/var/log/push-server/error.log", "/var/log/push-server/info.log"],
+                "active": active_map.get("push-server"),
+            },
+            {
+                "id": "mysql",
+                "name": "MySQL / Percona / MariaDB",
+                "journal_unit": "mysqld",
+                "files": mysql_files or ["/var/log/mysqld.log", "/var/log/mysql/error.log"],
+                "active": active_map.get("mysqld"),
+            },
+            {
+                "id": "redis",
+                "name": "Redis",
+                "journal_unit": "redis",
+                "files": redis_files or ["/var/log/redis/redis.log"],
+                "active": active_map.get("redis"),
+            },
+            {
+                "id": "memcached",
+                "name": "Memcached",
+                "journal_unit": "memcached",
+                "files": [],
+                "active": active_map.get("memcached"),
+            },
+            {
+                "id": "cron",
+                "name": "Cron (Задачи Bitrix)",
+                "journal_unit": "crond",
+                "files": ["/var/log/cron"],
+                "active": active_map.get("crond"),
+            },
+            {
+                "id": "bvat",
+                "name": "Bitrix-Env Auto-tuning (BVAT)",
+                "journal_unit": "bvat",
+                "files": ["/opt/webdir/logs/bvat.log"],
+                "active": active_map.get("bvat"),
+            },
+            {
+                "id": "php-fpm",
+                "name": "PHP-FPM",
+                "journal_unit": "php-fpm",
+                "files": ["/var/log/php-fpm/www-error.log"],
+                "active": active_map.get("php-fpm"),
+            },
+            {
+                "id": "mail",
+                "name": "Почта (msmtp / maillog)",
+                "journal_unit": None,
+                "files": ["/var/log/maillog"],
+                "active": None,
+            },
+            {
+                "id": "system",
+                "name": "Система (syslog / auth)",
+                "journal_unit": "_system",
+                "files": ["/var/log/messages", "/var/log/secure", "/var/log/dnf.log"],
+                "active": None,
+            },
+            {
+                "id": "custom",
+                "name": "Пользовательский файл",
+                "journal_unit": None,
+                "files": [],
+                "active": None,
+            },
+        ]
+
     async def read_logs(self, request: LogRequest) -> tuple[list[str], str]:
-        date_from = request.date_from.strftime("%Y-%m-%d %H:%M:%S")
-        date_to = request.date_to.strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(UTC)
+        d_from = request.date_from or (now - timedelta(hours=24))
+        d_to = request.date_to or now
+
+        if d_from.tzinfo is not None:
+            date_from = d_from.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        else:
+            date_from = d_from.strftime("%Y-%m-%d %H:%M:%S")
+
+        if d_to.tzinfo is not None:
+            date_to = d_to.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        else:
+            date_to = d_to.strftime("%Y-%m-%d %H:%M:%S")
+
         async with self.connect() as connection:
             if request.source == "journal":
                 return await self._read_journal_logs(
-                    connection, request.service, date_from, date_to, request.limit
+                    connection, request.service, date_from, date_to, request.limit, request.grep
                 )
             return await self._read_file_logs(
                 connection, request.file_path or "", date_from, date_to, request.limit,
@@ -349,15 +557,14 @@ class SSHClient:
     async def _read_journal_logs(
         self,
         connection: asyncssh.SSHClientConnection,
-        service: str,
+        service: str | None,
         date_from: str,
         date_to: str,
         limit: int,
+        grep: str | None = None,
     ) -> tuple[list[str], str]:
-        argv = (
+        argv: list[str] = [
             "/usr/bin/journalctl",
-            "-u",
-            service,
             "--since",
             date_from,
             "--until",
@@ -367,13 +574,21 @@ class SSHClient:
             str(limit),
             "--output",
             "short-iso",
-        )
-        result = await self.run_argv(connection, argv, timeout=60)
-        if result.exit_status != 0 and not result.stdout.strip():
+        ]
+        if service and service not in {"_system", "system"}:
+            argv.extend(["-u", service])
+        if grep:
+            argv.extend(["-g", grep])
+
+        result = await self.run_argv(connection, tuple(argv), timeout=60)
+        if result.exit_status not in (0, 1) and not result.stdout.strip():
             raise SSHError(
                 f"journalctl failed (exit {result.exit_status}): {result.stderr.strip()}"
             )
-        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        lines = [
+            line for line in result.stdout.splitlines()
+            if line.strip() and not line.strip().startswith("-- No entries --")
+        ]
         return lines, "journal"
 
     async def _read_file_logs(
@@ -385,25 +600,37 @@ class SSHClient:
         limit: int,
         grep: str | None,
     ) -> tuple[list[str], str]:
-        argv_parts: list[str] = ["/usr/bin/cat"]
-        if file_path:
-            argv_parts.append(file_path)
-        else:
+        if not file_path:
             raise SSHError("file_path is required for file source")
 
-        test = await self.run_argv(connection, ("/usr/bin/test", "-r", file_path), timeout=5)
+        try:
+            validated_path = validate_log_file_path(file_path)
+        except ValueError as exc:
+            raise SSHError(str(exc)) from exc
+
+        test = await self.run_argv(connection, ("/usr/bin/test", "-r", validated_path), timeout=5)
         if test.exit_status != 0:
-            raise SSHError(f"Log file not found or not readable: {file_path}")
+            raise SSHError(f"Log file not found or not readable: {validated_path}")
 
         if grep:
-            argv_parts = ["/usr/bin/grep", "-E", grep, file_path]
+            argv = ("/usr/bin/grep", "-E", grep, validated_path)
+            result = await self.run_argv(connection, argv, timeout=60)
+            if result.exit_status not in (0, 1):
+                raise SSHError(
+                    f"grep failed (exit {result.exit_status}): {result.stderr.strip()}"
+                )
+            if result.exit_status == 1 and not result.stdout.strip():
+                return [], "file"
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            if len(lines) > limit:
+                lines = lines[-limit:]
+            return lines, "file"
         else:
-            argv_parts = ["/usr/bin/tail", "-n", str(limit), file_path]
-
-        result = await self.run_argv(connection, tuple(argv_parts), timeout=60)
-        if result.exit_status != 0 and not result.stdout.strip():
-            raise SSHError(
-                f"Failed to read log file (exit {result.exit_status}): {result.stderr.strip()}"
-            )
-        lines = [line for line in result.stdout.splitlines() if line.strip()]
-        return lines, "file"
+            argv = ("/usr/bin/tail", "-n", str(limit), validated_path)
+            result = await self.run_argv(connection, argv, timeout=60)
+            if result.exit_status != 0 and not result.stdout.strip():
+                raise SSHError(
+                    f"Failed to read log file (exit {result.exit_status}): {result.stderr.strip()}"
+                )
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            return lines, "file"
