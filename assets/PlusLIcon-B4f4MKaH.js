@@ -1,0 +1,1 @@
+import{fn as e,hn as t,lr as n}from"./useAppContext-BbKbMuNy.js";function r(r,i){return n(),t(`svg`,{xmlns:`http://www.w3.org/2000/svg`,fill:`none`,viewBox:`0 0 24 24`,"aria-hidden":`true`,"data-slot":`icon`},[e(`path`,{fill:`currentColor`,d:`M11.3 18.3a.7.7 0 1 0 1.4 0v-5.6h5.6a.7.7 0 1 0 0-1.4h-5.6V5.7a.7.7 0 1 0-1.4 0v5.6H5.7a.7.7 0 1 0 0 1.4h5.6z`})])}export{r as t};
