@@ -6,6 +6,7 @@ import { useAppContext } from "../composables/useAppContext";
 import AddServerDialog from "../components/AddServerDialog.vue";
 import ActionDialog from "../components/ActionDialog.vue";
 import LogViewer from "../components/LogViewer.vue";
+import SnapshotViewer from "../components/SnapshotViewer.vue";
 import DeveloperResourcesIcon from "@bitrix24/b24icons-vue/outline/DeveloperResourcesIcon";
 import PlusLIcon from "@bitrix24/b24icons-vue/outline/PlusLIcon";
 import RefreshIcon from "@bitrix24/b24icons-vue/outline/RefreshIcon";
@@ -79,6 +80,83 @@ const actionDialogOpen = ref(false);
 const snapshot = ref(null);
 const snapshotLoading = ref(false);
 const activeTab = ref("capabilities");
+const servicesStatus = ref({});
+const loadingServices = ref(false);
+
+const keyServices = [
+  { key: "mysql", label: "MySQL / MariaDB", desc: "База данных" },
+  { key: "nginx", label: "Nginx", desc: "Веб-сервер" },
+  { key: "httpd", label: "Apache", desc: "PHP-бэкенд" },
+  { key: "php_fpm", label: "PHP-FPM", desc: "FastCGI" },
+  { key: "memcached", label: "Memcached", desc: "Кэш RAM" },
+  { key: "redis", label: "Redis", desc: "Кэш и очереди" },
+  { key: "push_server", label: "Push-сервер", desc: "Bitrix RTC" },
+  { key: "cron", label: "Cron", desc: "Задачи" },
+];
+
+function getServiceState(key) {
+  if (servicesStatus.value && servicesStatus.value[key] !== undefined) {
+    return servicesStatus.value[key];
+  }
+  return selected.value?.capabilities?.services?.[key] || (loadingServices.value ? "loading" : "unknown");
+}
+
+function serviceStateInfo(state) {
+  if (state === "active") {
+    return {
+      label: "Работает",
+      dotClass: "bg-emerald-500",
+      badgeClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+    };
+  }
+  if (state === "failed") {
+    return {
+      label: "Сбой",
+      dotClass: "bg-rose-500",
+      badgeClass: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30",
+    };
+  }
+  if (state === "inactive") {
+    return {
+      label: "Остановлен",
+      dotClass: "bg-zinc-400 dark:bg-zinc-500",
+      badgeClass: "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20",
+    };
+  }
+  if (state === "loading") {
+    return {
+      label: "…",
+      dotClass: "bg-amber-400 animate-pulse",
+      badgeClass: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+    };
+  }
+  return {
+    label: "Не активен",
+    dotClass: "bg-zinc-400/60",
+    badgeClass: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
+  };
+}
+
+async function loadServicesStatus() {
+  if (!selected.value?.id) {
+    servicesStatus.value = {};
+    return;
+  }
+  if (selected.value.capabilities?.services) {
+    servicesStatus.value = { ...selected.value.capabilities.services };
+  }
+  loadingServices.value = true;
+  try {
+    const res = await api.servicesStatus(selected.value.id);
+    if (res && Object.keys(res).length > 0) {
+      servicesStatus.value = res;
+    }
+  } catch {
+    // Keep cached
+  } finally {
+    loadingServices.value = false;
+  }
+}
 
 const selected = computed(() => {
   return servers.value.find((item) => item.id === selectedId.value) || servers.value[0] || null;
@@ -153,6 +231,7 @@ watch(
     } finally {
       loadingCapabilities.value = false;
     }
+    loadServicesStatus();
     if (activeTab.value === "snapshot") {
       await loadSnapshot();
     }
@@ -185,6 +264,7 @@ async function refreshCapabilities() {
   loadingCapabilities.value = true;
   try {
     capabilities.value = await api.refreshCapabilities(selected.value.id);
+    await loadServicesStatus();
     toast.add({
       title: "Возможности обновлены",
       color: "air-primary-success",
@@ -355,25 +435,63 @@ function handleTabChange(tab) {
       </template>
 
       <div class="space-y-6">
-        <!-- Meta list -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-elevated/50 border border-muted text-xs">
-          <div>
-            <span class="text-muted block">Адрес</span>
-            <span class="font-mono text-label block mt-0.5">{{ selected.address }}:{{ selected.port }}</span>
+        <!-- Meta list with Server Info & Service Statuses -->
+        <div class="p-4 rounded-xl bg-elevated/50 border border-muted text-xs space-y-4">
+          <!-- Top Row: Server Connection & Host Info -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div>
+              <span class="text-muted block">Адрес</span>
+              <span class="font-mono text-label block mt-0.5">{{ selected.address }}:{{ selected.port }}</span>
+            </div>
+            <div>
+              <span class="text-muted block">Пользователь</span>
+              <span class="font-medium text-label block mt-0.5">{{ selected.username }}</span>
+            </div>
+            <div>
+              <span class="text-muted block">SSH fingerprint</span>
+              <span class="font-mono text-label block mt-0.5 truncate" :title="selected.host_key_fingerprint">
+                {{ selected.host_key_fingerprint?.slice(0, 20) }}…
+              </span>
+            </div>
+            <div>
+              <span class="text-muted block">Проверен</span>
+              <span class="text-label block mt-0.5">{{ relativeTime(selected.capabilities_checked_at) }}</span>
+            </div>
           </div>
-          <div>
-            <span class="text-muted block">Пользователь</span>
-            <span class="font-medium text-label block mt-0.5">{{ selected.username }}</span>
-          </div>
-          <div>
-            <span class="text-muted block">SSH fingerprint</span>
-            <span class="font-mono text-label block mt-0.5 truncate" :title="selected.host_key_fingerprint">
-              {{ selected.host_key_fingerprint?.slice(0, 20) }}…
-            </span>
-          </div>
-          <div>
-            <span class="text-muted block">Проверен</span>
-            <span class="text-label block mt-0.5">{{ relativeTime(selected.capabilities_checked_at) }}</span>
+
+          <!-- Bottom Row: Key Services Status -->
+          <div class="pt-3 border-t border-muted/70">
+            <div class="flex items-center justify-between gap-2 mb-2.5">
+              <div class="flex items-center gap-2">
+                <span class="text-label font-semibold text-xs tracking-tight">Статусы ключевых служб</span>
+                <span v-if="loadingServices" class="text-[11px] text-muted animate-pulse">обновление…</span>
+              </div>
+              <span class="text-[11px] text-muted hidden sm:inline">systemd статус</span>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+              <div
+                v-for="svc in keyServices"
+                :key="svc.key"
+                class="flex flex-col p-2 rounded-lg border transition-colors"
+                :class="serviceStateInfo(getServiceState(svc.key)).badgeClass"
+                :title="`${svc.label} (${svc.desc}): ${serviceStateInfo(getServiceState(svc.key)).label}`"
+              >
+                <div class="flex items-center justify-between gap-1 mb-1">
+                  <span class="font-bold text-[11px] truncate">{{ svc.label }}</span>
+                  <span
+                    class="w-2 h-2 rounded-full shrink-0"
+                    :class="serviceStateInfo(getServiceState(svc.key)).dotClass"
+                  />
+                </div>
+                <div class="flex items-center justify-between text-[10px]">
+                  <span class="opacity-70 truncate">{{ svc.desc }}</span>
+                  <span class="font-medium shrink-0 ml-1">
+                    {{ serviceStateInfo(getServiceState(svc.key)).label }}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -466,13 +584,13 @@ function handleTabChange(tab) {
         </div>
 
         <!-- Tab 2: Snapshot -->
-        <div v-else-if="activeTab === 'snapshot'" class="space-y-4">
-          <div v-if="snapshot" class="p-4 rounded-xl bg-elevated border border-muted overflow-auto max-h-[460px]">
-            <pre class="terminal-output text-xs font-mono text-description whitespace-pre-wrap">{{ JSON.stringify(snapshot, null, 2) }}</pre>
-          </div>
-          <div v-else class="p-8 text-center text-sm text-muted">
-            {{ snapshotLoading ? 'Сбор диагностического снимка…' : 'Нажмите «Снимок» для загрузки состояния' }}
-          </div>
+        <div v-else-if="activeTab === 'snapshot'">
+          <SnapshotViewer
+            :snapshot="snapshot"
+            :loading="snapshotLoading"
+            :server="selected"
+            @refresh="loadSnapshot"
+          />
         </div>
 
         <!-- Tab 3: Logs -->

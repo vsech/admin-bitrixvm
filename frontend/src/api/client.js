@@ -1,4 +1,4 @@
-import { demoCapabilities, demoEvents, demoOperations, demoServers, demoUser } from "../data/demo";
+import { demoCapabilities, demoEvents, demoOperations, demoServers, demoSnapshot, demoUser } from "../data/demo";
 
 const DEMO = new URLSearchParams(window.location.search).get("demo") === "1";
 const wait = (value, delay = 180) => new Promise((resolve) => window.setTimeout(() => resolve(structuredClone(value)), delay));
@@ -90,7 +90,23 @@ class ApiClient {
   deleteServer(id) { return DEMO ? wait(null) : this.request(`/api/v1/servers/${id}`, { method: "DELETE" }); }
   capabilities(id) { return DEMO ? wait(demoCapabilities) : this.request(`/api/v1/servers/${id}/capabilities`); }
   refreshCapabilities(id) { return DEMO ? wait(demoCapabilities, 500) : this.request(`/api/v1/servers/${id}/capabilities/refresh`, { method: "POST" }); }
-  snapshot(id) { return DEMO ? wait({ hostname: "bx-prod-01", platform: "AlmaLinux 9.6", bitrixenv: "9.0.10", pool: ["bx-prod-01", "bx-stage-01"], services: { nginx: "active", mysql: "active", php_fpm: "active" } }, 500) : this.request(`/api/v1/servers/${id}/snapshot`); }
+  snapshot(id) { return DEMO ? wait(demoSnapshot, 500) : this.request(`/api/v1/servers/${id}/snapshot`); }
+  servicesStatus(id) {
+    if (DEMO) {
+      return wait({
+        nginx: "active",
+        httpd: "active",
+        mysql: "active",
+        php_fpm: "inactive",
+        memcached: "active",
+        redis: "active",
+        push_server: "active",
+        cron: "active",
+        bvat: "active",
+      }, 400);
+    }
+    return this.request(`/api/v1/servers/${id}/services-status`);
+  }
   logServices(serverId) {
     if (DEMO) {
       return wait([

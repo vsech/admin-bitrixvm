@@ -361,6 +361,40 @@ async def snapshot(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
+@router.get("/{server_id}/services-status", response_model=dict[str, str])
+async def get_server_services_status(
+    server_id: uuid.UUID,
+    _: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    server = await get_server_or_404(server_id, session)
+    try:
+        statuses = await SSHClient(server).get_service_statuses()
+        if statuses:
+            caps = dict(server.capabilities or {})
+            caps["services"] = statuses
+            server.capabilities = caps
+            await session.commit()
+            return statuses
+    except Exception as exc:
+        logger.warning("Failed to query service statuses for %s: %s", server_id, exc)
+
+    if server.capabilities and "services" in server.capabilities:
+        return server.capabilities["services"]
+
+    return {
+        "nginx": "unknown",
+        "httpd": "unknown",
+        "mysql": "unknown",
+        "php_fpm": "unknown",
+        "memcached": "unknown",
+        "redis": "unknown",
+        "push_server": "unknown",
+        "cron": "unknown",
+        "bvat": "unknown",
+    }
+
+
 @router.get("/{server_id}/log-services", response_model=list[LogServiceInfo])
 async def list_server_log_services(
     server_id: uuid.UUID,

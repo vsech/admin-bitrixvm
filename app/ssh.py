@@ -354,6 +354,7 @@ class SSHClient:
                 )
                 available[command] = result.exit_status == 0
             output["commands"] = available
+            output["services"] = await self.get_service_statuses(connection=connection)
         rpm_text = json.dumps(output.get("bitrix_env", {}))
         compatible = bool(re.search(r"bitrix-env-9\.", rpm_text))
         output["compatible"] = compatible
@@ -370,6 +371,53 @@ class SSHClient:
             action_capabilities[name] = {"available": reason is None, "reason": reason}
         output["actions"] = action_capabilities
         return cast(dict[str, Any], redact(output))
+
+    async def get_service_statuses(self, connection: Any = None) -> dict[str, str]:
+        cmd = (
+            "for s in nginx httpd mysqld mariadb redis memcached push-server crond php-fpm bvat; "
+            "do echo \"$s:$(systemctl is-active $s 2>/dev/null || echo unknown)\"; done"
+        )
+        raw = ""
+        try:
+            if connection is not None:
+                svc_res = await connection.run(cmd, check=False, encoding="utf-8")
+                raw = str(svc_res.stdout)
+            else:
+                async with self.connect() as conn:
+                    svc_res = await conn.run(cmd, check=False, encoding="utf-8")
+                    raw = str(svc_res.stdout)
+        except SSHError as exc:
+            logger.warning("Failed to query service statuses: %s", exc)
+            return {}
+
+        services: dict[str, str] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" in line:
+                unit, _, state = line.partition(":")
+                services[unit.strip()] = state.strip()
+
+        db_state = "inactive"
+        if services.get("mysqld") == "active" or services.get("mariadb") == "active":
+            db_state = "active"
+        elif services.get("mysqld") == "failed" or services.get("mariadb") == "failed":
+            db_state = "failed"
+        elif "active" in (services.get("mysqld", ""), services.get("mariadb", "")):
+            db_state = "active"
+        else:
+            db_state = services.get("mysqld") or services.get("mariadb") or "inactive"
+
+        return {
+            "nginx": services.get("nginx", "unknown"),
+            "httpd": services.get("httpd", "unknown"),
+            "mysql": db_state,
+            "php_fpm": services.get("php-fpm", "unknown"),
+            "memcached": services.get("memcached", "unknown"),
+            "redis": services.get("redis", "unknown"),
+            "push_server": services.get("push-server", "unknown"),
+            "cron": services.get("crond", "unknown"),
+            "bvat": services.get("bvat", "unknown"),
+        }
 
     async def snapshot(self) -> dict[str, Any]:
         commands = {

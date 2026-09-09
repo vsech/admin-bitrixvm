@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -311,3 +311,66 @@ async def test_read_server_logs_rejects_path_traversal(api_client):
         },
     )
     assert response.status_code == 422
+
+
+async def test_get_service_statuses_parsing():
+    client = object.__new__(SSHClient)
+
+    mock_conn = MagicMock()
+    mock_conn.run = AsyncMock(
+        return_value=CommandResult(
+            stdout=(
+                "nginx:active\n"
+                "httpd:active\n"
+                "mysqld:active\n"
+                "mariadb:inactive\n"
+                "redis:inactive\n"
+                "memcached:active\n"
+                "push-server:active\n"
+                "crond:active\n"
+                "php-fpm:inactive\n"
+                "bvat:active\n"
+            ),
+            stderr="",
+            exit_status=0,
+        )
+    )
+
+    statuses = await client.get_service_statuses(connection=mock_conn)
+    assert statuses["nginx"] == "active"
+    assert statuses["httpd"] == "active"
+    assert statuses["mysql"] == "active"
+    assert statuses["memcached"] == "active"
+    assert statuses["redis"] == "inactive"
+    assert statuses["push_server"] == "active"
+    assert statuses["cron"] == "active"
+    assert statuses["php_fpm"] == "inactive"
+
+
+async def test_server_services_status_api(api_client):
+    client, server_id = api_client
+    headers = await authenticate(client)
+
+    with patch("app.ssh.SSHClient.get_service_statuses", new_callable=AsyncMock) as mock_statuses:
+        mock_statuses.return_value = {
+            "nginx": "active",
+            "httpd": "active",
+            "mysql": "active",
+            "php_fpm": "inactive",
+            "memcached": "active",
+            "redis": "inactive",
+            "push_server": "active",
+            "cron": "active",
+            "bvat": "active",
+        }
+        response = await client.get(
+            f"/api/v1/servers/{server_id}/services-status",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["nginx"] == "active"
+        assert data["mysql"] == "active"
+        assert data["httpd"] == "active"
+        assert data["cron"] == "active"
+
