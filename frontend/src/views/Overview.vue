@@ -80,7 +80,7 @@ function getOperationServerName(serverId) {
             v-for="server in servers"
             :key="server.id"
             class="py-3.5 flex items-center justify-between hover:bg-muted/40 transition-colors px-1 rounded-lg cursor-pointer"
-            @click="router.push('/servers')"
+            @click="router.push({ path: '/servers', query: { server: server.id } })"
           >
             <div class="flex items-center gap-3 min-w-0">
               <div class="p-2 rounded-lg bg-default border border-muted shrink-0">

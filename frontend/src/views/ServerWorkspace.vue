@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "../api/client";
 import { useAppContext } from "../composables/useAppContext";
 import AddServerDialog from "../components/AddServerDialog.vue";
@@ -13,6 +13,7 @@ import FileIcon from "@bitrix24/b24icons-vue/outline/FileIcon";
 import SearchIcon from "@bitrix24/b24icons-vue/outline/SearchIcon";
 import ChevronRightLIcon from "@bitrix24/b24icons-vue/outline/ChevronRightLIcon";
 
+const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const { servers, operations, fetchServers, fetchOperations } = useAppContext();
@@ -62,9 +63,13 @@ function relativeTime(date) {
   return new Date(date).toLocaleDateString("ru-RU");
 }
 
+function isServerStale(server) {
+  if (!server?.capabilities_checked_at) return true;
+  return Date.now() - new Date(server.capabilities_checked_at).getTime() > 7200000;
+}
+
 const selectedId = ref(null);
 const capabilities = ref([]);
-const search = ref("");
 const actionSearch = ref("");
 const category = ref("all");
 const loadingCapabilities = ref(false);
@@ -79,9 +84,20 @@ const selected = computed(() => {
   return servers.value.find((item) => item.id === selectedId.value) || servers.value[0] || null;
 });
 
+const serverOptions = computed(() =>
+  servers.value.map((server) => ({
+    label: `${server.name} (${server.address})`,
+    description: `Порт: ${server.port} · ${relativeTime(server.capabilities_checked_at)}`,
+    value: server.id,
+  }))
+);
+
 onMounted(async () => {
   await fetchServers();
-  if (servers.value.length > 0 && !selectedId.value) {
+  const queryServerId = route.query.server;
+  if (queryServerId && servers.value.some((s) => s.id === queryServerId)) {
+    selectedId.value = queryServerId;
+  } else if (servers.value.length > 0 && !selectedId.value) {
     selectedId.value = servers.value[0].id;
   }
 });
@@ -89,7 +105,10 @@ onMounted(async () => {
 watch(
   () => servers.value,
   (list) => {
-    if (list.length > 0 && (!selectedId.value || !list.some((s) => s.id === selectedId.value))) {
+    const queryServerId = route.query.server;
+    if (queryServerId && list.some((s) => s.id === queryServerId)) {
+      selectedId.value = queryServerId;
+    } else if (list.length > 0 && (!selectedId.value || !list.some((s) => s.id === selectedId.value))) {
       selectedId.value = list[0].id;
     }
   },
@@ -97,8 +116,27 @@ watch(
 );
 
 watch(
+  () => selectedId.value,
+  (id) => {
+    if (id && route.query.server !== id) {
+      router.replace({ query: { ...route.query, server: id } });
+    }
+  }
+);
+
+watch(
+  () => route.query.server,
+  (newId) => {
+    if (newId && newId !== selectedId.value && servers.value.some((s) => s.id === newId)) {
+      selectedId.value = newId;
+    }
+  }
+);
+
+watch(
   () => selected.value?.id,
   async (id) => {
+    snapshot.value = null;
     if (!id) {
       capabilities.value = [];
       return;
@@ -115,14 +153,11 @@ watch(
     } finally {
       loadingCapabilities.value = false;
     }
+    if (activeTab.value === "snapshot") {
+      await loadSnapshot();
+    }
   },
   { immediate: true }
-);
-
-const visibleServers = computed(() =>
-  servers.value.filter((server) =>
-    `${server.name} ${server.address}`.toLowerCase().includes(search.value.toLowerCase())
-  )
 );
 
 const categories = computed(() => [
@@ -237,12 +272,13 @@ function handleTabChange(tab) {
         <p class="text-sm text-muted mt-1">Управление инфраструктурой и действиями BitrixEnv</p>
       </div>
 
-      <div class="flex items-center gap-3">
-        <div class="w-64">
-          <B24Input
-            v-model="search"
-            :icon="SearchIcon"
-            placeholder="Поиск по серверам…"
+      <div class="flex flex-wrap items-center gap-3">
+        <div v-if="servers.length" class="w-full sm:w-72 md:w-80">
+          <B24Select
+            v-model="selectedId"
+            :items="serverOptions"
+            :icon="DeveloperResourcesIcon"
+            placeholder="Выберите сервер"
             class="w-full"
           />
         </div>
@@ -274,57 +310,26 @@ function handleTabChange(tab) {
       </div>
     </B24Card>
 
-    <!-- Workspace Master/Detail -->
-    <div v-else class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <!-- Left Panel: Servers List -->
-      <B24Card class="lg:col-span-5 border border-muted overflow-hidden flex flex-col">
-        <template #header>
-          <div class="flex items-center justify-between text-xs font-semibold text-muted uppercase tracking-wider">
-            <span>Сервер</span>
-            <span>Статус</span>
-          </div>
-        </template>
-
-        <div v-if="visibleServers.length" class="divide-y divide-muted">
-          <div
-            v-for="server in visibleServers"
-            :key="server.id"
-            class="p-4 flex items-center justify-between cursor-pointer transition-colors"
-            :class="selected?.id === server.id ? 'bg-accented/60 border-l-4 border-l-[var(--ui-color-design-filled-blue)]' : 'hover:bg-muted/30'"
-            @click="selectedId = server.id"
-          >
-            <div class="min-w-0 space-y-1">
-              <div class="flex items-center gap-2">
-                <DeveloperResourcesIcon class="size-4 text-[var(--ui-color-design-filled-blue)] shrink-0" />
-                <span class="font-bold text-sm text-label truncate">{{ server.name }}</span>
+    <!-- Full-width Server Workspace -->
+    <B24Card v-else-if="selected" class="border border-muted space-y-6">
+      <template #header>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="p-2.5 rounded-xl bg-default border border-muted shrink-0">
+              <DeveloperResourcesIcon class="size-5 text-[var(--ui-color-design-filled-blue)]" />
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h2 class="text-xl font-bold text-label truncate">{{ selected.name }}</h2>
+                <B24Badge
+                  :label="isServerStale(selected) ? 'Проверить' : 'Доступен'"
+                  :color="isServerStale(selected) ? 'air-primary-warning' : 'air-primary-success'"
+                  size="sm"
+                />
               </div>
-              <p class="text-xs text-muted font-mono truncate">{{ server.address }}:{{ server.port }}</p>
-            </div>
-
-            <div class="flex flex-col items-end gap-1 shrink-0">
-              <B24Badge
-                :label="Date.now() - new Date(server.capabilities_checked_at).getTime() > 7200000 ? 'Проверить' : 'Доступен'"
-                :color="Date.now() - new Date(server.capabilities_checked_at).getTime() > 7200000 ? 'air-primary-warning' : 'air-primary-success'"
-                size="sm"
-              />
-              <span class="text-[11px] text-muted">{{ relativeTime(server.capabilities_checked_at) }}</span>
+              <p class="text-xs text-muted font-mono truncate">{{ selected.address }}:{{ selected.port }}</p>
             </div>
           </div>
-        </div>
-
-        <div v-else class="p-8 text-center text-sm text-muted">
-          Серверы по запросу не найдены
-        </div>
-      </B24Card>
-
-      <!-- Right Panel: Server Detail -->
-      <B24Card v-if="selected" class="lg:col-span-7 border border-muted space-y-6">
-        <template #header>
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
-            <div class="flex items-center gap-3">
-              <h2 class="text-xl font-bold text-label">{{ selected.name }}</h2>
-              <B24Badge label="Доступен" color="air-primary-success" size="sm" />
-            </div>
 
             <div class="flex items-center gap-2">
               <B24Button
@@ -474,7 +479,6 @@ function handleTabChange(tab) {
           <LogViewer :server="selected" />
         </div>
       </B24Card>
-    </div>
 
     <!-- Recent Operations Strip -->
     <B24Card class="border border-muted">
