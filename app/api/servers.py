@@ -380,7 +380,7 @@ async def get_server_services_status(
         logger.warning("Failed to query service statuses for %s: %s", server_id, exc)
 
     if server.capabilities and "services" in server.capabilities:
-        return server.capabilities["services"]
+        return dict(server.capabilities["services"])
 
     return {
         "nginx": "unknown",

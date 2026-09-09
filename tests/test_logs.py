@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,7 +12,6 @@ from app.security import SecretBox, hash_password
 from app.ssh import (
     CommandResult,
     SSHClient,
-    SSHError,
     is_active_log_file,
     validate_log_file_path,
 )

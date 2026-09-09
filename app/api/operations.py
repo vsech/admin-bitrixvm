@@ -5,6 +5,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -180,7 +181,7 @@ async def execute_action(
         )
         if existing is None:
             raise
-            return existing
+        return cast(Operation, existing)
     await session.refresh(operation)
     return operation
 
