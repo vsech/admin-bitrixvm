@@ -1,0 +1,60 @@
+name: Deploy Demo to GitVerse Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: gitverse-pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build & Publish to gh-pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix frontend ci
+
+      - name: Build Demo Panel (Vite)
+        run: npm --prefix frontend run build:demo
+
+      - name: Prepare SPA static fallback files
+        run: |
+          cp frontend/dist/index.html frontend/dist/404.html
+          touch frontend/dist/.nojekyll
+
+      - name: Publish to gh-pages branch
+        id: peaceiris
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./frontend/dist
+          publish_branch: gh-pages
+
+      - name: Fallback native git push to gh-pages
+        if: steps.peaceiris.outcome == 'failure'
+        run: |
+          cd frontend/dist
+          git init
+          git config user.name "gitverse-actions[bot]"
+          git config user.email "actions@gitverse.ru"
+          git checkout -b gh-pages
+          git add -A
+          git commit -m "deploy: update GitVerse Pages demo build [skip ci]"
+          HOST=$(echo "${{ github.server_url }}" | sed -e 's|^https://||' -e 's|^http://||')
+          git push -f "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@${HOST}/${{ github.repository }}.git" gh-pages:gh-pages

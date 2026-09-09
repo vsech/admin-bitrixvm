@@ -1,5 +1,15 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHashHistory, createWebHistory } from "vue-router";
 import { api } from "../api/client";
+
+const isStaticHosting =
+  typeof window !== "undefined" &&
+  (window.location.hostname.endsWith("github.io") ||
+    window.location.hostname.endsWith("gitverse.ru") ||
+    window.location.hostname.includes("pages"));
+
+const useHash =
+  import.meta.env.VITE_ROUTER_MODE === "hash" ||
+  (typeof window !== "undefined" && (window.location.hash.startsWith("#/") || isStaticHosting));
 
 const routes = [
   {
@@ -42,7 +52,7 @@ const routes = [
 ];
 
 export const router = createRouter({
-  history: createWebHistory(),
+  history: useHash ? createWebHashHistory() : createWebHistory(import.meta.env.BASE_URL),
   routes,
 });
 

@@ -1,6 +1,16 @@
 import { demoCapabilities, demoEvents, demoOperations, demoServers, demoSnapshot, demoUser } from "../data/demo";
 
-const DEMO = new URLSearchParams(window.location.search).get("demo") === "1";
+const isStaticHosting =
+  typeof window !== "undefined" &&
+  (window.location.hostname.endsWith("github.io") ||
+    window.location.hostname.endsWith("gitverse.ru") ||
+    window.location.hostname.includes("pages"));
+
+const DEMO =
+  new URLSearchParams(window.location.search).get("demo") === "1" ||
+  import.meta.env.VITE_DEMO_MODE === "1" ||
+  import.meta.env.VITE_DEMO_MODE === "true" ||
+  isStaticHosting;
 const wait = (value, delay = 180) => new Promise((resolve) => window.setTimeout(() => resolve(structuredClone(value)), delay));
 
 class ApiError extends Error {
