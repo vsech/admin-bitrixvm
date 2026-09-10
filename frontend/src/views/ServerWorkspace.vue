@@ -7,12 +7,15 @@ import AddServerDialog from "../components/AddServerDialog.vue";
 import ActionDialog from "../components/ActionDialog.vue";
 import LogViewer from "../components/LogViewer.vue";
 import SnapshotViewer from "../components/SnapshotViewer.vue";
+import EditServerDialog from "../components/EditServerDialog.vue";
 import DeveloperResourcesIcon from "@bitrix24/b24icons-vue/outline/DeveloperResourcesIcon";
 import PlusLIcon from "@bitrix24/b24icons-vue/outline/PlusLIcon";
 import RefreshIcon from "@bitrix24/b24icons-vue/outline/RefreshIcon";
 import FileIcon from "@bitrix24/b24icons-vue/outline/FileIcon";
 import SearchIcon from "@bitrix24/b24icons-vue/outline/SearchIcon";
 import ChevronRightLIcon from "@bitrix24/b24icons-vue/outline/ChevronRightLIcon";
+import TrashcanIcon from "@bitrix24/b24icons-vue/outline/TrashcanIcon";
+import EditPencilIcon from "@bitrix24/b24icons-vue/main/EditPencilIcon";
 
 const route = useRoute();
 const router = useRouter();
@@ -75,6 +78,7 @@ const actionSearch = ref("");
 const category = ref("all");
 const loadingCapabilities = ref(false);
 const addOpen = ref(false);
+const editOpen = ref(false);
 const activeAction = ref(null);
 const actionDialogOpen = ref(false);
 const snapshot = ref(null);
@@ -314,6 +318,34 @@ function handleActionExecuted(operation) {
   fetchOperations();
 }
 
+const confirmDeleteOpen = ref(false);
+const deleteLoading = ref(false);
+
+async function deleteSelectedServer() {
+  if (!selected.value) return;
+  const serverToDelete = selected.value;
+  deleteLoading.value = true;
+  try {
+    await api.deleteServer(serverToDelete.id);
+    toast.add({
+      title: "Сервер удален",
+      description: `Сервер «${serverToDelete.name}» успешно исключён из контура`,
+      color: "air-primary-success",
+    });
+    confirmDeleteOpen.value = false;
+    await fetchServers();
+    selectedId.value = servers.value.length > 0 ? servers.value[0].id : null;
+  } catch (err) {
+    toast.add({
+      title: "Ошибка удаления сервера",
+      description: err.message,
+      color: "air-primary-alert",
+    });
+  } finally {
+    deleteLoading.value = false;
+  }
+}
+
 const tabItems = computed(() => [
   {
     value: "capabilities",
@@ -429,6 +461,22 @@ function handleTabChange(tab) {
               size="sm"
               :loading="snapshotLoading"
               @click="loadSnapshot"
+            />
+            <B24Button
+              label="Изменить"
+              :icon="EditPencilIcon"
+              color="air-secondary-no-accent"
+              variant="outline"
+              size="sm"
+              @click="editOpen = true"
+            />
+            <B24Button
+              label="Удалить"
+              :icon="TrashcanIcon"
+              color="air-primary-alert"
+              variant="outline"
+              size="sm"
+              @click="confirmDeleteOpen = true"
             />
           </div>
         </div>
@@ -658,6 +706,52 @@ function handleTabChange(tab) {
       :server="selected"
       :capability="activeAction"
       @executed="handleActionExecuted"
+    />
+
+    <!-- Confirm Delete Modal -->
+    <B24Modal
+      v-model:open="confirmDeleteOpen"
+      title="Удаление сервера"
+      :description="`Исключение сервера «${selected?.name}» из контура управления`"
+    >
+      <template #body>
+        <div class="space-y-3">
+          <p class="text-sm text-description">
+            Вы действительно хотите удалить сервер <strong class="text-label">{{ selected?.name }}</strong> ({{ selected?.address }})?
+          </p>
+          <B24Alert
+            title="Внимание"
+            description="Сервер и сохранённые учётные данные будут удалены из базы контроллера. Сам удалённый сервер и его работающие службы затронуты не будут."
+            color="air-secondary-alert"
+          />
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex items-center justify-end gap-2 w-full">
+          <B24Button
+            label="Отмена"
+            color="air-secondary-no-accent"
+            variant="ghost"
+            :disabled="deleteLoading"
+            @click="confirmDeleteOpen = false"
+          />
+          <B24Button
+            label="Удалить сервер"
+            color="air-primary-alert"
+            :loading="deleteLoading"
+            @click="deleteSelectedServer"
+          />
+        </div>
+      </template>
+    </B24Modal>
+
+    <!-- Edit Server Dialog -->
+    <EditServerDialog
+      v-if="selected"
+      v-model:open="editOpen"
+      :server="selected"
+      @updated="fetchServers"
     />
   </div>
 </template>

@@ -102,6 +102,15 @@ async def probe_host_key(address: str, port: int, timeout: float = 10) -> tuple[
     return exported, fingerprint, key.get_algorithm()
 
 
+def generate_ssh_keypair(comment: str = "") -> tuple[str, str]:
+    key = asyncssh.generate_private_key("ssh-ed25519")
+    priv = key.export_private_key("openssh").decode("utf-8")
+    pub = key.export_public_key("openssh").decode("utf-8").strip()
+    if comment:
+        pub = f"{pub} {comment}"
+    return priv, pub
+
+
 ALLOWED_LOG_PREFIXES = (
     "/var/log/",
     "/opt/webdir/logs/",
@@ -256,6 +265,37 @@ class SSHClient:
                     )
         except (OSError, asyncssh.Error):
             logger.warning("unable to start SFTP for secret cleanup")
+
+    async def install_authorized_key(
+        self, public_key: str, connection: asyncssh.SSHClientConnection | None = None
+    ) -> None:
+        cleaned_key = public_key.strip()
+        if not cleaned_key:
+            raise SSHError("cannot install empty public key")
+        script = (
+            "set -e\n"
+            "mkdir -p -m 700 /root/.ssh\n"
+            "chmod 700 /root/.ssh\n"
+            "touch /root/.ssh/authorized_keys\n"
+            "chmod 600 /root/.ssh/authorized_keys\n"
+            f"if ! grep -qxF {shlex.quote(cleaned_key)} /root/.ssh/authorized_keys; then\n"
+            f"    printf '%s\\n' {shlex.quote(cleaned_key)} >> /root/.ssh/authorized_keys\n"
+            "fi\n"
+            "if command -v restorecon >/dev/null 2>&1; then restorecon -R /root/.ssh; fi\n"
+        )
+        if connection is not None:
+            result = await self.run_argv(connection, ("/bin/sh", "-c", script))
+            if result.exit_status != 0:
+                raise SSHError(
+                    f"failed to install SSH public key: {result.stderr.strip() or result.stdout.strip()}"
+                )
+        else:
+            async with self.connect() as conn:
+                result = await self.run_argv(conn, ("/bin/sh", "-c", script))
+                if result.exit_status != 0:
+                    raise SSHError(
+                        f"failed to install SSH public key: {result.stderr.strip() or result.stdout.strip()}"
+                    )
 
     async def cleanup_secret_files(self, paths: dict[str, str]) -> None:
         if not paths:

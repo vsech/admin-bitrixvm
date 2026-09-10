@@ -92,6 +92,13 @@ class ServerCreate(ApiModel):
     credential: Credential
 
 
+class ServerUpdate(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    address: str | None = Field(default=None, min_length=1, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    enabled: bool | None = None
+
+
 class ServerRead(ApiModel):
     id: uuid.UUID
     name: str

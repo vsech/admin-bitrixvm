@@ -96,8 +96,51 @@ class ApiClient {
   changePassword(id, payload) { return DEMO ? wait(null) : this.request(`/api/v1/users/${id}/password`, { method: "POST", body: JSON.stringify(payload) }); }
   servers() { return DEMO ? wait(demoServers) : this.request("/api/v1/servers"); }
   probe(payload) { return DEMO ? wait({ id: crypto.randomUUID(), ...payload, fingerprint: "SHA256:V3k8PjX2m7A4vT9nQ5rL1cD6sW0yB8uE", host_key_algorithm: "ssh-ed25519", expires_at: new Date(Date.now() + 600000).toISOString() }, 420) : this.request("/api/v1/servers/probes", { method: "POST", body: JSON.stringify(payload) }); }
-  createServer(payload) { return DEMO ? wait({ id: crypto.randomUUID(), name: payload.name, address: "10.20.0.42", port: 22, username: "root", credential_type: payload.credential.type, host_key_fingerprint: payload.confirmed_fingerprint, enabled: true, capabilities: { actions: {} }, capabilities_checked_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }, 500) : this.request("/api/v1/servers", { method: "POST", body: JSON.stringify(payload) }); }
-  deleteServer(id) { return DEMO ? wait(null) : this.request(`/api/v1/servers/${id}`, { method: "DELETE" }); }
+  createServer(payload) {
+    if (DEMO) {
+      const newServer = {
+        id: crypto.randomUUID(),
+        name: payload.name,
+        address: "10.20.0.42",
+        port: 22,
+        username: "root",
+        credential_type: "private_key",
+        host_key_fingerprint: payload.confirmed_fingerprint,
+        enabled: true,
+        capabilities: { actions: {} },
+        capabilities_checked_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      demoServers.push(newServer);
+      return wait(newServer, 500);
+    }
+    return this.request("/api/v1/servers", { method: "POST", body: JSON.stringify(payload) });
+  }
+  updateServer(id, payload) {
+    if (DEMO) {
+      const s = demoServers.find((srv) => srv.id === id);
+      if (s) {
+        if (payload.name) s.name = payload.name;
+        if (payload.address) s.address = payload.address;
+        if (payload.port) s.port = payload.port;
+        s.updated_at = new Date().toISOString();
+        return wait({ ...s }, 300);
+      }
+      return wait(null, 300);
+    }
+    return this.request(`/api/v1/servers/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+  deleteServer(id) {
+    if (DEMO) {
+      const idx = demoServers.findIndex((s) => s.id === id);
+      if (idx !== -1) {
+        demoServers.splice(idx, 1);
+      }
+      return wait(null, 300);
+    }
+    return this.request(`/api/v1/servers/${id}`, { method: "DELETE" });
+  }
   capabilities(id) { return DEMO ? wait(demoCapabilities) : this.request(`/api/v1/servers/${id}/capabilities`); }
   refreshCapabilities(id) { return DEMO ? wait(demoCapabilities, 500) : this.request(`/api/v1/servers/${id}/capabilities/refresh`, { method: "POST" }); }
   snapshot(id) { return DEMO ? wait(demoSnapshot, 500) : this.request(`/api/v1/servers/${id}/snapshot`); }

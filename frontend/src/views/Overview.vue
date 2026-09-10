@@ -1,14 +1,28 @@
 <script setup>
-import { computed } from "vue";
+import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useAppContext } from "../composables/useAppContext";
+import EditServerDialog from "../components/EditServerDialog.vue";
 import DeveloperResourcesIcon from "@bitrix24/b24icons-vue/outline/DeveloperResourcesIcon";
 import PlayLIcon from "@bitrix24/b24icons-vue/outline/PlayLIcon";
 import ShieldCheckedIcon from "@bitrix24/b24icons-vue/outline/ShieldCheckedIcon";
 import ChevronRightLIcon from "@bitrix24/b24icons-vue/outline/ChevronRightLIcon";
+import EditPencilIcon from "@bitrix24/b24icons-vue/main/EditPencilIcon";
 
 const router = useRouter();
-const { servers, operations } = useAppContext();
+const { servers, operations, fetchServers } = useAppContext();
+
+const editingServer = ref(null);
+const editOpen = ref(false);
+
+function openEditServer(server) {
+  editingServer.value = server;
+  editOpen.value = true;
+}
+
+function handleServerUpdated() {
+  fetchServers();
+}
 
 const runningOperations = computed(() =>
   operations.value.filter((item) => ["queued", "running"].includes(item.status))
@@ -91,7 +105,17 @@ function getOperationServerName(serverId) {
                 <p class="text-xs text-muted font-mono">{{ server.address }}</p>
               </div>
             </div>
-            <B24Badge label="Доступен" color="air-primary-success" size="sm" />
+            <div class="flex items-center gap-2">
+              <B24Button
+                :icon="EditPencilIcon"
+                color="air-secondary-no-accent"
+                variant="ghost"
+                size="xs"
+                title="Редактировать сервер"
+                @click.stop="openEditServer(server)"
+              />
+              <B24Badge label="Доступен" color="air-primary-success" size="sm" />
+            </div>
           </div>
         </div>
 
@@ -146,5 +170,13 @@ function getOperationServerName(serverId) {
         </div>
       </B24Card>
     </div>
+
+    <!-- Edit Server Dialog -->
+    <EditServerDialog
+      v-if="editingServer"
+      v-model:open="editOpen"
+      :server="editingServer"
+      @updated="handleServerUpdated"
+    />
   </div>
 </template>

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
 
 from app.db import SessionLocal, engine
 from app.main import app
-from app.models import Base, Server, User
+from app.models import Base, Server, ServerProbe, User
 from app.security import SecretBox, hash_password
+from app.ssh import SSHClient, SSHError
 
 
 @pytest.fixture
@@ -242,3 +245,154 @@ async def test_change_password_wrong_current(api_client) -> None:
         },
     )
     assert response.status_code == 401
+
+
+async def test_delete_server(api_client) -> None:
+    client, server_id = api_client
+    headers = await authenticate(client)
+
+    delete_resp = await client.delete(f"/api/v1/servers/{server_id}", headers=headers)
+    assert delete_resp.status_code == 204
+
+    get_resp = await client.get(f"/api/v1/servers/{server_id}/capabilities", headers=headers)
+    assert get_resp.status_code == 404
+
+
+async def test_create_server_password_bootstraps_key(api_client, monkeypatch: Any) -> None:
+    client, _ = api_client
+    headers = await authenticate(client)
+
+    me = await client.get("/api/v1/users/me", headers=headers)
+    user_id = uuid.UUID(me.json()["id"])
+
+    probe_id = uuid.uuid4()
+    async with SessionLocal() as session:
+        probe = ServerProbe(
+            id=probe_id,
+            address="192.168.1.100",
+            port=22,
+            host_key="ssh-ed25519 AAAAC3TEST",
+            fingerprint="SHA256:testfingerprint",
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            created_by=user_id,
+        )
+        session.add(probe)
+        await session.commit()
+
+    installed_keys: list[str] = []
+
+    async def mock_install_authorized_key(self, public_key: str, connection=None):
+        installed_keys.append(public_key)
+
+    async def mock_discovery(self):
+        return {"compatible": True, "actions": {}}
+
+    monkeypatch.setattr(SSHClient, "install_authorized_key", mock_install_authorized_key)
+    monkeypatch.setattr(SSHClient, "discovery", mock_discovery)
+
+    response = await client.post(
+        "/api/v1/servers",
+        headers=headers,
+        json={
+            "name": "new-server",
+            "probe_id": str(probe_id),
+            "confirmed_fingerprint": "SHA256:testfingerprint",
+            "username": "root",
+            "credential": {
+                "type": "password",
+                "password": "initial-secret-password",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["name"] == "new-server"
+    assert created["credential_type"] == "private_key"
+    assert len(installed_keys) == 1
+    assert "admin-bitrixvm-new-server" in installed_keys[0]
+
+    async with SessionLocal() as session:
+        server = await session.get(Server, uuid.UUID(created["id"]))
+        assert server is not None
+        assert server.credential_type == "private_key"
+        creds = SecretBox.configured().decrypt_json(server.credentials_encrypted)
+        assert "private_key" in creds
+        assert "password" not in creds
+
+
+async def test_update_server_name(api_client) -> None:
+    client, server_id = api_client
+    headers = await authenticate(client)
+
+    response = await client.patch(
+        f"/api/v1/servers/{server_id}",
+        headers=headers,
+        json={"name": "renamed-sandbox"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "renamed-sandbox"
+
+    async with SessionLocal() as session:
+        server = await session.get(Server, server_id)
+        assert server is not None
+        assert server.name == "renamed-sandbox"
+
+
+async def test_update_server_address_and_port(api_client, monkeypatch: Any) -> None:
+    client, server_id = api_client
+    headers = await authenticate(client)
+
+    probed: list[tuple[str, int]] = []
+
+    async def mock_probe_host_key(address: str, port: int, timeout: float = 10):
+        probed.append((address, port))
+        return "ssh-ed25519 AAAANEWKEY", "SHA256:newfingerprint", "ssh-ed25519"
+
+    async def mock_discovery(self):
+        return {"compatible": True, "actions": {}}
+
+    monkeypatch.setattr("app.api.servers.probe_host_key", mock_probe_host_key)
+    monkeypatch.setattr(SSHClient, "discovery", mock_discovery)
+
+    response = await client.patch(
+        f"/api/v1/servers/{server_id}",
+        headers=headers,
+        json={"address": "192.168.0.99", "port": 2222},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["address"] == "192.168.0.99"
+    assert data["port"] == 2222
+    assert probed == [("192.168.0.99", 2222)]
+
+    async with SessionLocal() as session:
+        server = await session.get(Server, server_id)
+        assert server is not None
+        assert server.address == "192.168.0.99"
+        assert server.port == 2222
+        assert server.host_key == "ssh-ed25519 AAAANEWKEY"
+
+
+async def test_update_server_address_unreachable(api_client, monkeypatch: Any) -> None:
+    client, server_id = api_client
+    headers = await authenticate(client)
+
+    async def mock_probe_host_key_fail(address: str, port: int, timeout: float = 10):
+        raise SSHError("Connection timed out")
+
+    monkeypatch.setattr("app.api.servers.probe_host_key", mock_probe_host_key_fail)
+
+    response = await client.patch(
+        f"/api/v1/servers/{server_id}",
+        headers=headers,
+        json={"address": "192.168.0.250"},
+    )
+    assert response.status_code == 502, response.text
+
+    # Old address should remain intact in DB
+    async with SessionLocal() as session:
+        server = await session.get(Server, server_id)
+        assert server is not None
+        assert server.address == "192.168.0.56"
+
+

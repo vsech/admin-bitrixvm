@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from app.actions import ACTIONS
-from app.ssh import CommandResult, SSHClient, parse_output, redact
+from app.ssh import CommandResult, SSHClient, generate_ssh_keypair, parse_output, redact
 
 
 def test_recursive_redaction_of_real_bitrix_shapes() -> None:
@@ -82,3 +82,33 @@ async def test_background_action_defers_secret_cleanup_until_worker_finishes(
 
     await client.cleanup_secret_files(deferred)
     assert removed == [deferred]
+
+
+def test_generate_ssh_keypair() -> None:
+    priv, pub = generate_ssh_keypair("test-comment")
+    assert "BEGIN OPENSSH PRIVATE KEY" in priv
+    assert pub.startswith("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5")
+    assert pub.endswith("test-comment")
+
+
+async def test_install_authorized_key_executes_script(monkeypatch: Any) -> None:
+    client = object.__new__(SSHClient)
+    executed_commands: list[tuple[str, ...]] = []
+
+    async def run_argv(
+        _connection: object, argv: tuple[str, ...], **_kwargs: Any
+    ) -> CommandResult:
+        executed_commands.append(argv)
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(client, "run_argv", run_argv)
+    await client.install_authorized_key(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment", connection=object()
+    )
+
+    assert len(executed_commands) == 1
+    script = executed_commands[0][2]
+    assert "mkdir -p -m 700 /root/.ssh" in script
+    assert "chmod 600 /root/.ssh/authorized_keys" in script
+    assert "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey comment" in script
+

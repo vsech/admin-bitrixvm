@@ -19,6 +19,7 @@ const address = ref("");
 const port = ref(22);
 const probe = ref(null);
 const name = ref("");
+const nameManuallyEdited = ref(false);
 const credentialType = ref("private_key");
 const secret = ref("");
 const passphrase = ref("");
@@ -31,6 +32,7 @@ function reset() {
   port.value = 22;
   probe.value = null;
   name.value = "";
+  nameManuallyEdited.value = false;
   credentialType.value = "private_key";
   secret.value = "";
   passphrase.value = "";
@@ -43,12 +45,20 @@ function handleClose() {
   reset();
 }
 
+function onAddressInput() {
+  if (!nameManuallyEdited.value) {
+    name.value = address.value.trim().replace(/[^A-Za-z0-9_.-]/g, "-");
+  }
+}
+
 async function runProbe() {
   loading.value = true;
   try {
     const result = await api.probe({ address: address.value, port: Number(port.value) });
     probe.value = result;
-    name.value = address.value.replace(/[^A-Za-z0-9_.-]/g, "-");
+    if (!name.value.trim()) {
+      name.value = address.value.trim().replace(/[^A-Za-z0-9_.-]/g, "-");
+    }
     step.value = 2;
   } catch (error) {
     toast.add({
@@ -107,16 +117,26 @@ async function createServer() {
     @update:open="handleClose"
   >
     <template #body>
-      <!-- Step 1: Address & Port Probe -->
+      <!-- Step 1: Name, Address & Port Probe -->
       <form v-if="step === 1" id="add-server-form" class="space-y-4" @submit.prevent="runProbe">
+        <B24FormField label="Имя сервера" hint="Идентификатор сервера в панели (латиница, цифры, дефис, точка)">
+          <B24Input
+            v-model="name"
+            placeholder="bx-prod-01 (опционально, по умолчанию из адреса)"
+            pattern="[A-Za-z0-9_.\-]+"
+            @input="nameManuallyEdited = true"
+          />
+        </B24FormField>
+
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div class="sm:col-span-2">
-            <B24FormField label="Адрес сервера" required>
+            <B24FormField label="Адрес сервера (IP или домен)" required>
               <B24Input
                 v-model="address"
                 placeholder="10.20.0.42 или host.internal"
                 required
                 autofocus
+                @input="onAddressInput"
               />
             </B24FormField>
           </div>
@@ -135,7 +155,7 @@ async function createServer() {
 
         <B24Alert
           title="Проверка безопасности"
-          description="Контроллер сначала установит безопасный пробный контакт и получит публичный SSH fingerprint хоста. Сверьте его перед передачей пароля или ключа."
+          description="Контроллер сначала установит безопасный пробный контакт и получит публичный SSH fingerprint хоста. Сверьте его перед передачей реквизитов доступа."
           color="air-secondary-accent"
         />
       </form>
@@ -191,6 +211,13 @@ async function createServer() {
             />
           </div>
         </div>
+
+        <B24Alert
+          v-if="credentialType === 'password'"
+          title="Автоматическая настройка SSH-ключа"
+          description="Контроллер подключится по паролю один раз, автоматически сгенерирует закрытый ключ Ed25519, добавит открытый ключ в ~/.ssh/authorized_keys на сервере и в дальнейшем будет использовать только ключ. Пароль в системе не сохраняется."
+          color="air-primary-success"
+        />
 
         <B24FormField
           :label="credentialType === 'password' ? 'Пароль root' : 'Приватный SSH-ключ'"

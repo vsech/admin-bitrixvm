@@ -25,9 +25,16 @@ from app.schemas import (
     ProbeRead,
     ServerCreate,
     ServerRead,
+    ServerUpdate,
 )
 from app.security import SecretBox
-from app.ssh import SSHClient, SSHError, probe_host_key, validate_log_file_path
+from app.ssh import (
+    SSHClient,
+    SSHError,
+    generate_ssh_keypair,
+    probe_host_key,
+    validate_log_file_path,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/servers", tags=["servers"])
@@ -90,16 +97,51 @@ async def create_server(
         material = payload.credential.material()
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    server = Server(
-        name=payload.name,
-        address=probe.address,
-        port=probe.port,
-        username=payload.username,
-        credential_type=payload.credential.type,
-        credentials_encrypted=SecretBox.configured().encrypt_json(material),
-        host_key=probe.host_key,
-        host_key_fingerprint=probe.fingerprint,
-    )
+    if payload.credential.type == "password":
+        bootstrap_server = Server(
+            name=payload.name,
+            address=probe.address,
+            port=probe.port,
+            username=payload.username,
+            credential_type="password",
+            credentials_encrypted=SecretBox.configured().encrypt_json(material),
+            host_key=probe.host_key,
+            host_key_fingerprint=probe.fingerprint,
+        )
+        try:
+            private_key_pem, public_key = generate_ssh_keypair(
+                comment=f"admin-bitrixvm-{payload.name}"
+            )
+            bootstrap_client = SSHClient(bootstrap_server)
+            await bootstrap_client.install_authorized_key(public_key)
+        except SSHError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, f"SSH key setup via password failed: {exc}"
+            ) from exc
+
+        server = Server(
+            name=payload.name,
+            address=probe.address,
+            port=probe.port,
+            username=payload.username,
+            credential_type="private_key",
+            credentials_encrypted=SecretBox.configured().encrypt_json(
+                {"private_key": private_key_pem}
+            ),
+            host_key=probe.host_key,
+            host_key_fingerprint=probe.fingerprint,
+        )
+    else:
+        server = Server(
+            name=payload.name,
+            address=probe.address,
+            port=probe.port,
+            username=payload.username,
+            credential_type=payload.credential.type,
+            credentials_encrypted=SecretBox.configured().encrypt_json(material),
+            host_key=probe.host_key,
+            host_key_fingerprint=probe.fingerprint,
+        )
     # Verify authentication and compatibility before persisting the target.
     try:
         server.capabilities = await SSHClient(server).discovery()
@@ -261,6 +303,61 @@ async def get_server(
     session: AsyncSession = Depends(get_db),
 ) -> Server:
     return await get_server_or_404(server_id, session)
+
+
+@router.patch("/{server_id}", response_model=ServerRead)
+async def update_server(
+    server_id: uuid.UUID,
+    payload: ServerUpdate,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Server:
+    server = await get_server_or_404(server_id, session)
+
+    if payload.name is not None and payload.name != server.name:
+        server.name = payload.name
+    if payload.enabled is not None:
+        server.enabled = payload.enabled
+
+    address_changed = payload.address is not None and payload.address != server.address
+    port_changed = payload.port is not None and payload.port != server.port
+
+    if address_changed or port_changed:
+        new_address = payload.address if payload.address is not None else server.address
+        new_port = payload.port if payload.port is not None else server.port
+        now = datetime.now(UTC)
+        try:
+            host_key, fingerprint, _algo = await probe_host_key(
+                new_address, new_port, get_settings().ssh_connect_timeout
+            )
+        except SSHError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Не удалось получить SSH-ключ по адресу {new_address}:{new_port}: {exc}",
+            ) from exc
+
+        server.address = new_address
+        server.port = new_port
+        server.host_key = host_key
+        server.host_key_fingerprint = fingerprint
+
+        try:
+            server.capabilities = await SSHClient(server).discovery()
+            server.capabilities_checked_at = now
+        except SSHError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Проверка подключения по адресу {new_address}:{new_port} не удалась: {exc}",
+            ) from exc
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Server name already exists") from None
+
+    await session.refresh(server)
+    return server
 
 
 @router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
