@@ -9,14 +9,133 @@ export const demoServers = [
   { id: "server-backup", name: "bx-backup-01", address: "10.20.0.31", port: 22, username: "root", credential_type: "private_key", host_key_fingerprint: "SHA256:8b7c14da99f3e0871bc04ebd91928f3c21", enabled: true, capabilities_checked_at: minutesAgo(180), created_at: "2026-05-18T12:15:00Z", updated_at: minutesAgo(180), capabilities: { actions: {}, services: { nginx: "inactive", httpd: "inactive", mysql: "active", php_fpm: "inactive", memcached: "inactive", redis: "inactive", push_server: "inactive", cron: "active", bvat: "inactive" } } },
 ];
 
-export const demoCapabilities = [
-  { action: "pool.status", available: true, reason: null, risk: "low", category: "pool", summary: "Состояние пула", request_schema: { type: "object", properties: {}, required: [] } },
-  { action: "site.create", available: true, reason: null, risk: "medium", category: "sites", summary: "Создать сайт", request_schema: { type: "object", properties: { site: { type: "string", description: "Имя сайта" }, root: { type: "string", description: "Корневая директория" } }, required: ["site", "root"] } },
-  { action: "web.php.configure", available: true, reason: null, risk: "high", category: "web", summary: "Настроить PHP", request_schema: { type: "object", properties: { host: { type: "string", description: "Bitrix pool hostname", "x-options-source": "pool_hosts", "x-options": ["bx-prod-01", "bx-stage-01"] }, version: { type: "string", enum: ["8.2", "8.3", "8.4"], description: "Версия PHP" } }, required: ["host", "version"] } },
-  { action: "mysql.root_password", available: true, reason: null, risk: "critical", category: "mysql", summary: "Сменить пароль MySQL", request_schema: { type: "object", properties: { host: { type: "string", description: "Сервер MySQL" }, password: { type: "string", format: "password", writeOnly: true, description: "Новый пароль" } }, required: ["host", "password"] } },
-  { action: "transformer.configure", available: false, reason: "Модуль не установлен", risk: "high", category: "transformer", summary: "Настроить трансформер документов", request_schema: { type: "object", properties: {}, required: [] } },
-  { action: "local.reboot", available: true, reason: null, risk: "critical", category: "local", summary: "Перезагрузить сервер", request_schema: { type: "object", properties: {}, required: [] } },
-];
+import { ACTIONS_META } from "./capabilitiesMeta";
+
+const disabledUpstream = {
+  "host.repository": "Переключение канала репозитория отключено в BitrixEnv 9.0.10",
+  "mysql.create_replica": "Настройка репликации MySQL временно отключена в upstream BitrixEnv 9.0.10",
+  "mysql.promote_master": "Назначение мастера временно отключено в upstream BitrixEnv 9.0.10",
+  "mysql.remove_replica": "Удаление реплики временно отключено в upstream BitrixEnv 9.0.10",
+  "web.add_node": "Добавление web-ноды отключено в BitrixEnv 9.0.10",
+  "web.remove_node": "Удаление web-ноды отключено в BitrixEnv 9.0.10",
+  "monitoring.enable": "Модуль мониторинга Nagios/Munin отключен в BitrixEnv 9.0.10",
+  "monitoring.update": "Модуль мониторинга Nagios/Munin отключен в BitrixEnv 9.0.10",
+  "monitoring.disable": "Модуль мониторинга Nagios/Munin отключен в BitrixEnv 9.0.10",
+  "transformer.configure": "Служба трансформатора документов не установлена на хосте",
+  "transformer.remove": "Служба трансформатора документов не установлена на хосте",
+};
+
+const actionRiskMap = {
+  "local.reboot": "critical",
+  "local.halt": "critical",
+  "site.delete": "critical",
+  "pool.delete": "critical",
+  "host.delete": "critical",
+  "host.forget": "critical",
+  "mysql.change_password": "critical",
+  "mysql.remove_replica": "critical",
+  "memcached.remove": "critical",
+  "push.remove": "critical",
+  "transformer.remove": "critical",
+  "monitoring.disable": "critical",
+  "site.ntlm_delete": "critical",
+  "sphinx.delete": "critical",
+};
+
+const sampleSchemas = {
+  "site.create_kernel": {
+    type: "object",
+    properties: {
+      site: { type: "string", description: "Имя сайта (домен или имя папки)", default: "newsite.example.com" },
+      root: { type: "string", description: "Корневая директория (DocumentRoot)", default: "/home/bitrix/ext_www/newsite" },
+      charset: { type: "string", enum: ["utf-8", "windows-1251"], default: "utf-8", description: "Кодировка сайта" },
+      database: { type: "string", description: "Имя базы данных (будет создана)", default: "sitemanager2" },
+      dbuser: { type: "string", description: "Пользователь базы данных", default: "bitrix0" },
+    },
+    required: ["site", "root"],
+  },
+  "site.delete": {
+    type: "object",
+    properties: {
+      site: { type: "string", description: "Имя удаляемого сайта", default: "b24_crm" },
+    },
+    required: ["site"],
+  },
+  "site.https_enable": {
+    type: "object",
+    properties: {
+      site: { type: "string", description: "Имя сайта", default: "default" },
+    },
+    required: ["site"],
+  },
+  "site.email": {
+    type: "object",
+    properties: {
+      site: { type: "string", description: "Имя сайта", default: "default" },
+      smtp_host: { type: "string", description: "Адрес SMTP-сервера", default: "smtp.yandex.ru" },
+      smtp_port: { type: "integer", description: "Порт SMTP", default: 465 },
+      smtp_user: { type: "string", description: "Логин / Email" },
+      smtp_password: { type: "string", format: "password", writeOnly: true, description: "Пароль SMTP" },
+      tls: { type: "boolean", description: "Использовать TLS/SSL", default: true },
+    },
+    required: ["site", "smtp_host", "smtp_port", "smtp_user"],
+  },
+  "host.add": {
+    type: "object",
+    properties: {
+      host: { type: "string", description: "IP-адрес или домен добавляемого сервера" },
+      password: { type: "string", format: "password", writeOnly: true, description: "Пароль пользователя root" },
+    },
+    required: ["host", "password"],
+  },
+  "mysql.change_password": {
+    type: "object",
+    properties: {
+      host: { type: "string", description: "Хост базы данных (обычно localhost)", default: "localhost" },
+      password: { type: "string", format: "password", writeOnly: true, description: "Новый пароль root СУБД" },
+    },
+    required: ["password"],
+  },
+  "local.network_static": {
+    type: "object",
+    properties: {
+      interface: { type: "string", description: "Сетевой интерфейс", default: "eth0" },
+      ip: { type: "string", description: "IPv4 адрес", default: "10.20.0.11" },
+      netmask: { type: "string", description: "Маска подсети", default: "255.255.255.0" },
+      gateway: { type: "string", description: "Основной шлюз", default: "10.20.0.1" },
+      dns: { type: "string", description: "DNS-сервер", default: "77.88.8.8" },
+    },
+    required: ["interface", "ip", "netmask", "gateway"],
+  },
+};
+
+export const demoCapabilities = Object.entries(ACTIONS_META).map(([actionName, meta]) => {
+  const isBlocked = actionName in disabledUpstream;
+  let risk = actionRiskMap[actionName];
+  if (!risk) {
+    if (actionName.includes("upgrade") || actionName.includes("rollback") || actionName.includes("create") || actionName.includes("add") || actionName.includes("ntlm") || actionName.includes("static")) {
+      risk = "high";
+    } else if (actionName.includes("enable") || actionName.includes("disable") || actionName.includes("config") || actionName.includes("update") || actionName.includes("email") || actionName.includes("stop")) {
+      risk = "medium";
+    } else {
+      risk = "low";
+    }
+  }
+
+  return {
+    action: actionName,
+    available: !isBlocked,
+    reason: isBlocked ? disabledUpstream[actionName] : null,
+    risk,
+    category: meta.domain,
+    summary: meta.title,
+    request_schema: sampleSchemas[actionName] || {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  };
+});
 
 export const demoOperations = [
   { id: "op-1", server_id: "server-prod", user_id: "user-admin", action: "site.create", category: "sites", risk: "high", status: "succeeded", args_redacted: { site: "shop.example.ru" }, idempotency_key: "demo-site-create", remote_task_id: "task-2814", result: { status: "ok" }, error_code: null, error_message: null, created_at: minutesAgo(17), started_at: minutesAgo(16), finished_at: minutesAgo(13), updated_at: minutesAgo(13) },

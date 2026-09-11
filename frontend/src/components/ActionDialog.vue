@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from "vue";
 import { api } from "../api/client";
+import { getActionMeta } from "../data/capabilitiesMeta";
 import AlertIcon from "@bitrix24/b24icons-vue/outline/AlertIcon";
 import CircleCheckIcon from "@bitrix24/b24icons-vue/outline/CircleCheckIcon";
 
@@ -26,6 +27,8 @@ const toast = useToast();
 const values = ref({});
 const preview = ref(null);
 const loading = ref(false);
+
+const actionMeta = computed(() => getActionMeta(props.capability?.action));
 
 const confirmationRequired = computed(() =>
   ["high", "critical"].includes(props.capability.risk)
@@ -142,20 +145,25 @@ async function executeAction() {
 <template>
   <B24Modal
     :open="open"
-    :title="capability.summary || capability.action"
+    :title="actionMeta.title || capability.summary || capability.action"
     :description="`${server.name} · ${capability.action}`"
     :b24ui="{ content: 'max-w-2xl' }"
     @update:open="emit('update:open', $event)"
   >
     <template #body>
       <div class="space-y-6">
-        <!-- Risk Notice -->
-        <div class="flex items-center justify-between p-3.5 rounded-xl bg-elevated/80 border border-muted">
-          <div class="flex items-center gap-2.5">
-            <B24Badge :label="riskLabel" :color="riskBadgeColor" size="sm" />
-            <span class="text-xs text-description">
-              {{ confirmationRequired ? 'Требуется предварительное подтверждение параметров' : 'Можно поставить в очередь сразу' }}
-            </span>
+        <!-- Action Description & Risk Notice -->
+        <div class="space-y-2">
+          <p v-if="actionMeta.description" class="text-sm text-description">
+            {{ actionMeta.description }}
+          </p>
+          <div class="flex items-center justify-between p-3.5 rounded-xl bg-elevated/80 border border-muted">
+            <div class="flex items-center gap-2.5">
+              <B24Badge :label="riskLabel" :color="riskBadgeColor" size="sm" />
+              <span class="text-xs text-description">
+                {{ confirmationRequired ? 'Требуется предварительное подтверждение параметров' : 'Можно поставить в очередь сразу' }}
+              </span>
+            </div>
           </div>
         </div>
 
