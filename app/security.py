@@ -11,10 +11,12 @@ from typing import Any
 
 import jwt
 from argon2 import PasswordHasher
+
 try:
     from argon2.exceptions import InvalidHashError, VerifyMismatchError
 except ImportError:
-    from argon2.exceptions import InvalidHash as InvalidHashError, VerifyMismatchError  # type: ignore[assignment]
+    from argon2.exceptions import InvalidHash as InvalidHashError
+    from argon2.exceptions import VerifyMismatchError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.config import Settings, get_settings
